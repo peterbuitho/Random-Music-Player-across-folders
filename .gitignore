@@ -1,0 +1,25 @@
+# Ignore build artifacts and persistent caches
+build/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Persistent cache files (customize as needed)
+tags_cache.json
+*.db
+*.sqlite
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# PyInstaller
+*.spec
+
+# Virtual environments
+venv/
+.env/
