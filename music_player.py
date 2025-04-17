@@ -68,6 +68,23 @@ def fetch_lyrics(artist, title):
 
 class PlayerApp:
     CONFIG_FILE = ".music_player_config"
+    FONT_FAMILY = "Segoe UI"
+    FONT_SIZES = {
+        "default": 11,
+        "small": 9,
+        "medium": 10,
+        "large": 12,
+        "xlarge": 14
+    }
+    FONT_STYLES = {
+        "normal": (),
+        "bold": ("bold",),
+        "italic": ("italic",),
+        "bold_italic": ("bold", "italic")
+    }
+    # Example: self.fonts["label"] = (FONT_FAMILY, FONT_SIZES["medium"], "bold")
+    def font(self, size_key="default", style_key="normal"):
+        return (self.FONT_FAMILY, self.FONT_SIZES[size_key], *self.FONT_STYLES[style_key])
 
     def __init__(self, root):
         self.root = root
@@ -134,8 +151,8 @@ class PlayerApp:
     def setup_ui(self):
 
         def set_font_size(newsize):
-            self.playlist_box.config(font=("Segoe UI", int(newsize)))
-            self.lyrics_text.config(font=("Segoe UI", int(newsize)))
+            self.playlist_box.config(font=(self.FONT_FAMILY, int(newsize)))
+            self.lyrics_text.config(font=(self.FONT_FAMILY, int(newsize)))
 
         self.update_font_size = lambda: set_font_size(self.font_size_var.get())
         self.root.title("Random Music Player")
@@ -173,7 +190,7 @@ class PlayerApp:
                                       bg=btn_bg, fg=btn_fg, relief="raised", bd=3, activebackground=accent)
         change_parent_btn.grid(row=0, column=1, padx=2, pady=3)
         self.parent_folder_label = tk.Label(folder_frame, text="Parent: " + (self.last_parent_folder or "Not set"),
-                                            bg=bg_panel, fg=accent, font=("Segoe UI", 10, "italic"))
+                                            bg=bg_panel, fg=accent, font=self.font("medium", "italic"))
         self.parent_folder_label.grid(row=0, column=2, padx=5, pady=3, sticky="w")
         # Folder list controls
         clear_btn = tk.Button(folder_frame, text="Clear Folders", command=self.clear_folders, bg=btn_bg, fg=btn_fg,
@@ -184,7 +201,7 @@ class PlayerApp:
         remove_btn.grid(row=0, column=4, padx=2, pady=3)
         # Move selected folders label, listbox, and scrollbar to row 1
         self.selected_folders_label = tk.Label(folder_frame, text="Selected Folders (0):", bg=bg_panel, fg=fg_label,
-                 font=("Segoe UI", 10, "bold"))
+                 font=self.font("medium", "bold"))
         self.selected_folders_label.grid(row=1, column=0, padx=5, pady=(2,2), sticky="w", columnspan=2)
         folders_scroll = tk.Scrollbar(folder_frame, orient="vertical")
         self.folders_listbox = tk.Listbox(folder_frame, height=3, width=60, selectmode=tk.MULTIPLE,
@@ -207,28 +224,28 @@ class PlayerApp:
             else:
                 self.genre_frame.grid_remove()
                 self.genre_toggle_btn.config(text="Show Genres")
-        self.genre_frame = tk.LabelFrame(self.root, text="Genres", bg=genre_bg, fg="#232323", relief="groove", bd=3, font=("Segoe UI", 10, "bold"))
+        self.genre_frame = tk.LabelFrame(self.root, text="Genres", bg=genre_bg, fg="#232323", relief="groove", bd=3, font=self.font("medium", "bold"))
         self.genre_frame.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
         self.genre_bg = genre_bg  # Store for later use
 
         # Number of songs
         num_frame = tk.Frame(self.root, bg=bg_panel, relief="groove", bd=2)
         num_frame.grid(row=2, column=0, sticky="ew", padx=5)
-        tk.Label(num_frame, text="Number of Songs:", bg=bg_panel, fg=fg_label, font=("Segoe UI", 10)).pack(side="left", padx=2, pady=2)
+        tk.Label(num_frame, text="Number of Songs:", bg=bg_panel, fg=fg_label, font=self.font("medium")).pack(side="left", padx=2, pady=2)
         self.num_entry = tk.Entry(num_frame, width=5, bg=entry_bg, fg=entry_fg, relief="sunken", bd=2)
         self.num_entry.pack(side="left", padx=2, pady=2)
         self.num_entry.insert(0, "10")
         pick_btn = tk.Button(num_frame, text="Pick Songs", command=self.pick_songs, bg=pick_yellow, fg="black", relief="raised", bd=3, activebackground=pick_yellow)
         pick_btn.pack(side="left", padx=5, pady=2)
-        shuffle_btn = tk.Button(num_frame, text="Shuffle", command=self.shuffle_playlist, bg=nav_grey, fg="#232323", relief="raised", bd=2, font=("Segoe UI", 9))
+        shuffle_btn = tk.Button(num_frame, text="Shuffle", command=self.shuffle_playlist, bg=nav_grey, fg="#232323", relief="raised", bd=2, font=self.font("small"))
         shuffle_btn.pack(side="left", padx=(2,5), pady=2)
         # Total duration next to Pick Songs button
-        self.duration_label = tk.Label(num_frame, text="Total duration: 0 min", bg=bg_panel, fg=accent, font=("Segoe UI", 10, "bold"))
+        self.duration_label = tk.Label(num_frame, text="Total duration: 0 min", bg=bg_panel, fg=accent, font=self.font("medium", "bold"))
         self.duration_label.pack(side="left", padx=5, pady=2)
         # Total number of songs, right-aligned
-        self.song_count_label = tk.Label(num_frame, text=f"Total songs: 0", bg=bg_panel, fg=accent, font=("Segoe UI", 10, "bold"), anchor="e", justify="right")
+        self.song_count_label = tk.Label(num_frame, text=f"Total songs: 0", bg=bg_panel, fg=accent, font=self.font("medium", "bold"), anchor="e", justify="right")
         self.song_count_label.pack(side="right", padx=(5,0), pady=2)
-        self.genre_toggle_btn = tk.Button(num_frame, text="Hide Genres", command=lambda: (self.genre_visible.set(not self.genre_visible.get()), toggle_genre_frame()), bg=genre_bg, fg="#232323", relief="raised", bd=2, font=("Segoe UI", 9))
+        self.genre_toggle_btn = tk.Button(num_frame, text="Hide Genres", command=lambda: (self.genre_visible.set(not self.genre_visible.get()), toggle_genre_frame()), bg=genre_bg, fg="#232323", relief="raised", bd=2, font=self.font("small"))
         self.genre_toggle_btn.pack(side="right", padx=(10,5), pady=2)
 
 
@@ -238,13 +255,13 @@ class PlayerApp:
         font_frame.columnconfigure(0, weight=1)
         right_inner = tk.Frame(font_frame, bg=bg_panel)
         right_inner.grid(row=0, column=1, sticky="e")
-        tk.Label(right_inner, text="Font Size:", bg=bg_panel, fg=fg_label, font=("Segoe UI", 10)).pack(side="left", padx=(0,2))
+        tk.Label(right_inner, text="Font Size:", bg=bg_panel, fg=fg_label, font=self.font("medium")).pack(side="left", padx=(0,2))
         self.font_size_var = tk.IntVar(value=11)
         def _update_font_size():
             size = self.font_size_var.get()
-            self.playlist_box.config(font=("Segoe UI", size))
-            self.lyrics_text.config(font=("Segoe UI", size))
-        font_spin = tk.Spinbox(right_inner, from_=8, to=24, width=3, textvariable=self.font_size_var, command=_update_font_size, font=("Segoe UI", 10))
+            self.playlist_box.config(font=(self.FONT_FAMILY, size))
+            self.lyrics_text.config(font=(self.FONT_FAMILY, size))
+        font_spin = tk.Spinbox(right_inner, from_=8, to=24, width=3, textvariable=self.font_size_var, command=_update_font_size, font=self.font("medium"))
         font_spin.pack(side="left")
         self.update_font_size = _update_font_size
 
@@ -259,7 +276,7 @@ class PlayerApp:
         # Playlist with scrollbar
         playlist_frame = tk.Frame(main_pane, bg=bg_panel, relief="groove", bd=3)
         playlist_scroll = tk.Scrollbar(playlist_frame, orient="vertical")
-        self.playlist_box = tk.Listbox(playlist_frame, width=60, yscrollcommand=playlist_scroll.set, bg=bg_list, fg="#eaeaea", relief="sunken", bd=2, highlightbackground=accent, selectbackground=accent, font=("Segoe UI", 11))
+        self.playlist_box = tk.Listbox(playlist_frame, width=60, yscrollcommand=playlist_scroll.set, bg=bg_list, fg="#eaeaea", relief="sunken", bd=2, highlightbackground=accent, selectbackground=accent, font=self.font())
         playlist_scroll.config(command=self.playlist_box.yview)
         self.playlist_box.pack(side="left", fill="both", expand=True, padx=3, pady=3)
         playlist_scroll.pack(side="right", fill="y")
@@ -272,7 +289,7 @@ class PlayerApp:
         cover_frame.pack(side="left", padx=5, anchor="n")
         self.cover_label = tk.Label(cover_frame, bg=bg_panel)
         self.cover_label.pack(side="top", anchor="n")
-        self.song_title_label = tk.Label(cover_frame, text="", bg=bg_panel, fg=accent, font=("Segoe UI", 12, "bold"), wraplength=280, justify="center")
+        self.song_title_label = tk.Label(cover_frame, text="", bg=bg_panel, fg=accent, font=self.font("large", "bold"), wraplength=280, justify="center")
         self.song_title_label.pack(side="top", anchor="n")
         self.cover_frame = cover_frame  # For later use
 
@@ -296,12 +313,12 @@ class PlayerApp:
         self.progress_bar.bind('<ButtonRelease-1>', self.on_progress_release)
         self._progress_dragging = False
         # Song remaining time label under progress bar, right aligned
-        self.song_time_label = tk.Label(cover_frame, text="", bg=bg_panel, fg=accent, font=("Segoe UI", 9, "italic"), anchor="e", width=12, justify="right")
+        self.song_time_label = tk.Label(cover_frame, text="", bg=bg_panel, fg=accent, font=self.font("small", "italic"), anchor="e", width=12, justify="right")
         self.song_time_label.pack(side="top", fill="x", padx=5, pady=(0,6))
         lyrics_frame = tk.Frame(info_frame, bg=bg_panel)
         lyrics_frame.pack(side="left", fill="both", expand=True)
         lyrics_scroll = tk.Scrollbar(lyrics_frame, orient="vertical")
-        self.lyrics_text = tk.Text(lyrics_frame, height=10, width=50, wrap="word", yscrollcommand=lyrics_scroll.set, bg=bg_list, fg=fg_main, relief="sunken", bd=2, highlightbackground=accent, insertbackground=fg_main, font=("Segoe UI", 11))
+        self.lyrics_text = tk.Text(lyrics_frame, height=10, width=50, wrap="word", yscrollcommand=lyrics_scroll.set, bg=bg_list, fg=fg_main, relief="sunken", bd=2, highlightbackground=accent, insertbackground=fg_main, font=self.font())
         lyrics_scroll.config(command=self.lyrics_text.yview)
         self.lyrics_text.pack(side="left", fill="both", expand=True, padx=3, pady=3)
         lyrics_scroll.pack(side="right", fill="y")
@@ -326,15 +343,15 @@ class PlayerApp:
         ctrl_frame.columnconfigure(0, weight=1)
         center_inner = tk.Frame(ctrl_frame, bg=bg_panel)
         center_inner.pack(side="left", anchor="center", expand=True)
-        self.play_btn = tk.Button(center_inner, text="▶", command=self.play, bg=play_green, fg="white", relief="raised", bd=3, activebackground=play_green, font=("Segoe UI", 14, "bold"), width=8)
+        self.play_btn = tk.Button(center_inner, text="▶", command=self.play, bg=play_green, fg="white", relief="raised", bd=3, activebackground=play_green, font=self.font("xlarge", "bold"), width=8)
         self.play_btn.pack(side="left", padx=2, pady=2)
-        tk.Button(center_inner, text="⏸", command=self.pause, bg=stop_red, fg="white", relief="raised", bd=3, activebackground=stop_red, font=("Segoe UI", 14, "bold")).pack(side="left", padx=2, pady=2)
-        tk.Button(center_inner, text="⏮", command=self.prev, bg=nav_grey, fg="#232323", relief="raised", bd=3, activebackground=nav_grey, font=("Segoe UI", 14, "bold")).pack(side="left", padx=2, pady=2)
-        tk.Button(center_inner, text="⏭", command=self.next, bg=nav_grey, fg="#232323", relief="raised", bd=3, activebackground=nav_grey, font=("Segoe UI", 14, "bold")).pack(side="left", padx=2, pady=2)
+        tk.Button(center_inner, text="⏸", command=self.pause, bg=stop_red, fg="white", relief="raised", bd=3, activebackground=stop_red, font=self.font("xlarge", "bold")).pack(side="left", padx=2, pady=2)
+        tk.Button(center_inner, text="⏮", command=self.prev, bg=nav_grey, fg="#232323", relief="raised", bd=3, activebackground=nav_grey, font=self.font("xlarge", "bold")).pack(side="left", padx=2, pady=2)
+        tk.Button(center_inner, text="⏭", command=self.next, bg=nav_grey, fg="#232323", relief="raised", bd=3, activebackground=nav_grey, font=self.font("xlarge", "bold")).pack(side="left", padx=2, pady=2)
         # Volume slider right-aligned
         right_inner = tk.Frame(ctrl_frame, bg=bg_panel)
         right_inner.pack(side="right", anchor="e")
-        tk.Label(right_inner, text="Volume:", bg=bg_panel, fg=fg_label, font=("Segoe UI", 10)).pack(side="left", padx=(2,2))
+        tk.Label(right_inner, text="Volume:", bg=bg_panel, fg=fg_label, font=self.font("medium")).pack(side="left", padx=(2,2))
         self.volume_var = tk.IntVar(value=80)
         volume_slider = tk.Scale(right_inner, from_=0, to=100, orient=tk.HORIZONTAL, variable=self.volume_var,
                                 bg=bg_panel, fg=accent, troughcolor=bg_list, highlightthickness=0, showvalue=True, length=200)
@@ -716,7 +733,7 @@ class PlayerApp:
             display_text = title or artist
         # Try to fit font size
         for size in (12, 10, 8):
-            self.song_title_label.config(font=("Segoe UI", size, "bold"), text=display_text)
+            self.song_title_label.config(font=(self.FONT_FAMILY, size, "bold"), text=display_text)
             self.song_title_label.update_idletasks()
             # Get text width in pixels
             label_width = self.song_title_label.winfo_reqwidth()
