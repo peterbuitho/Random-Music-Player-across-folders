@@ -412,7 +412,7 @@ audio:-webkit-media-controls-play-button {
 **Tip:** You can enter multiple music folder paths, separated by commas or semicolons.<br>
 **Example:**
 ```
-\\BuiDS\musik\24bit_flac; \\BuiDS\musik\16bit
+\\BuiDS\musik\24bit_flac; \\BuiDS\musik\16bit (Windows) or /volume1/musik/24bit_flac, /volume1/musik/16bit (Linux)
 ```
 (You can use either forward or backslashes for paths.)
 """)
@@ -555,4 +555,4 @@ favicon_html = """
 <link rel=\"icon\" type=\"image/x-icon\" href=\"favicon.ico\">\n"""
 gr.HTML(favicon_html)
 
-demo.launch(allowed_paths=allowed_paths, inbrowser=True)
+demo.launch(allowed_paths=allowed_paths, inbrowser=True, server_name="0.0.0.0", server_port=7860)
