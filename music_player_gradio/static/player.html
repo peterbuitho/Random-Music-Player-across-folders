@@ -373,7 +373,7 @@ function updateMeta(song) {
     document.getElementById('title').textContent = song.title || 'Unknown Title';
     document.getElementById('artist').textContent = song.artist || '';
     document.getElementById('genres').textContent = song.genres && song.genres.length ? song.genres.join(', ') : '';
-    document.getElementById('cover').src = song.cover_url ? API_BASE + song.cover_url : '';
+    document.getElementById('cover').src = song.cover_url ? (API_BASE + song.cover_url) : '/static/default_cover.png';
 }
 
 function updateLyrics(idx) {
