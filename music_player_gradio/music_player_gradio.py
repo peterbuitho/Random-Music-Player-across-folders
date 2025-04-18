@@ -9,6 +9,14 @@ from mutagen.mp3 import MP3
 import requests
 import re
 
+# --- Hybrid API (FastAPI) integration ---
+from fastapi import FastAPI
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+import mimetypes
+
+# --- End Hybrid API imports ---
+
 # Helper to get all audio files recursively
 def get_audio_files(folders, exts=(".mp3", ".flac")):
     files = []
@@ -334,6 +342,8 @@ def get_allowed_paths():
         'D:\\',
         '\\BuiDS\\musik',
         '//BuiDS/musik',
+        '/volume1/musik/24bit_flac',
+        '/volume1/musik/16bit',
     ]
     paths.extend(broad_allowed)
     return paths
@@ -408,16 +418,40 @@ audio:-webkit-media-controls-play-button {
 }
 """) as demo:
     gr.Markdown("# Random Music Player (Gradio)")
-    gr.Markdown(r"""
+    with gr.Tabs():
+        # --- New WaveSurfer Player tab ---
+        with gr.Tab("Player"):
+            # Embed the custom player as an iframe for full JS/CSS isolation
+            gr.HTML('<iframe id="wavesurfer-iframe" src="/static/player.html" style="width:100%;height:auto;min-height:1200px;max-height:95vh;border:none;max-width:100%;margin:auto;display:block;"></iframe>')
+            gr.HTML('''<script>
+(function() {
+    function sendThemeToIframe() {
+        var theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+        var iframe = document.getElementById('wavesurfer-iframe');
+        if (iframe && iframe.contentWindow) {
+            iframe.contentWindow.postMessage({type: 'set-theme', theme: theme}, '*');
+        }
+    }
+    // Send on load
+    window.addEventListener('DOMContentLoaded', sendThemeToIframe);
+    // Send on theme change (Gradio toggles .dark on <html>)
+    const observer = new MutationObserver(sendThemeToIframe);
+    observer.observe(document.documentElement, {attributes: true, attributeFilter: ['class']});
+    // Also send after a short delay in case iframe loads late
+    setTimeout(sendThemeToIframe, 1000);
+})();
+</script>''')
+
+        # --- Renamed tab ---
+        with gr.Tab("Create playlist"):
+            gr.Markdown(r"""
 **Tip:** You can enter multiple music folder paths, separated by commas or semicolons.<br>
 **Example:**
 ```
-\\BuiDS\musik\24bit_flac; \\BuiDS\musik\16bit (Windows) or /volume1/musik/24bit_flac, /volume1/musik/16bit (Linux)
+\\BuiDS\musik\24bit_flac; \\BuiDS\musik\16bit
 ```
 (You can use either forward or backslashes for paths.)
 """)
-    with gr.Tabs():
-        with gr.Tab("Player"):
             # Load folder input value and scan data from cache if available
             _folder_input_value = None
             _cache = None
@@ -460,45 +494,28 @@ audio:-webkit-media-controls-play-button {
             _song_count_value = f"Total songs found: {len(player.audio_files)}" if getattr(player, 'audio_files', None) else ""
             song_count_text = gr.Textbox(label="Song Count", interactive=False, value=_song_count_value)
             playlist_table = gr.Dataframe(headers=["#", "Title", "Artist", "Album", "Genres"], interactive=False, label="Playlist")
-            song_number_input = gr.Number(value=1, label="Song Number to Play (1-based)", precision=0, interactive=True)
 
-            with gr.Row():
-                prev_btn = gr.Button("Previous")
-                play_btn = gr.Button("Play")
-                next_btn = gr.Button("Next")
+            # --- Hide audio player, transport, title, artist, lyrics in Music Library tab ---
+            # Only show playlist table and controls
 
-            audio = gr.Audio(label="Now Playing", interactive=False, autoplay=True)
-            song_title = gr.Textbox(label="Title", interactive=False)
-            song_artist = gr.Textbox(label="Artist", interactive=False)
-            lyrics_box = gr.Textbox(label="Lyrics", lines=8, interactive=False)
-
-            # --- Wire up transport buttons ---
-            play_btn.click(
-                fn=play,
-                inputs=[song_number_input],
-                outputs=[audio, song_title, song_artist, lyrics_box]
+            # --- Update song selector choices after scanning or picking songs ---
+            def update_song_choices():
+                table = player.get_playlist_table()
+                choices = [str(i+1) for i in range(len(player.playlist))]
+                return gr.update(choices=choices, value=choices[0] if choices else ""), table
+            scan_btn.click(
+                fn=start_background_scan,
+                inputs=[folder_input],
+                outputs=[song_count_text, genre_dropdown, status_text]
             )
-            prev_btn.click(
-                fn=prev_song,
-                outputs=[audio, song_title, song_artist, lyrics_box]
+            refresh_btn.click(
+                fn=refresh_playlist_and_genres,
+                outputs=[song_count_text, genre_dropdown, status_text]
             )
-            next_btn.click(
-                fn=next_song,
-                outputs=[audio, song_title, song_artist, lyrics_box]
+            clear_cache_btn.click(
+                fn=clear_cache,
+                outputs=[song_count_text, genre_dropdown, status_text]
             )
-
-            # Update song selector choices after scanning or picking songs
-            def update_song_selector_table():
-                choices = []
-                for idx, f in enumerate(player.playlist):
-                    tags = player.tags_cache.get(f) or get_tags(f)
-                    title = tags.get('title', os.path.basename(f))
-                    artist = tags.get('artist', '')
-                    display = f"{idx+1}. {title} - {artist}" if artist else f"{idx+1}. {title}"
-                    choices.append(display)
-            scan_btn.click(fn=start_background_scan, inputs=[folder_input], outputs=[song_count_text, genre_dropdown, status_text])
-            refresh_btn.click(fn=refresh_playlist_and_genres, outputs=[song_count_text, genre_dropdown, status_text])
-            clear_cache_btn.click(fn=clear_cache, outputs=[song_count_text, genre_dropdown, status_text])
             update_genre_btn.click(
                 fn=lambda genres: f"Total songs found: {len(player.filter_by_genre(genres))}",
                 inputs=[genre_dropdown],
@@ -523,23 +540,31 @@ audio:-webkit-media-controls-play-button {
             theme_dropdown = gr.Dropdown(["Default", "Soft", "Monochrome"], value=_selected_theme, label="Gradio Theme", interactive=True)
             theme_status = gr.Markdown(visible=False)
             def _show_theme_status(theme):
-                return gr.update(visible=True), f"Theme set to {theme}. Please reload the app to apply."
+                return gr.update(visible=True)
+            def _show_theme_status_message(theme):
+                return f"Theme set to {theme}. Please reload the app to apply."
             theme_dropdown.change(fn=set_theme, inputs=[theme_dropdown], outputs=[theme_status])
             theme_dropdown.change(fn=_show_theme_status, inputs=[theme_dropdown], outputs=[theme_status])
+            theme_dropdown.change(fn=_show_theme_status_message, inputs=[theme_dropdown], outputs=[theme_status])
             # --- Restart server button ---
             import sys
             def restart_server():
                 import os
                 import time
+                # Only allow restart if started as a script
+                if not sys.argv or sys.argv[0] == '-c' or not os.path.isfile(sys.argv[0]):
+                    return "Automatic restart is not supported for your launch method. Please restart the server manually."
                 # Show message before restarting
                 time.sleep(0.5)
                 os.execl(sys.executable, sys.executable, *sys.argv)
+
             with gr.Row():
                 restart_btn = gr.Button("Restart Server", elem_classes="small-btn")
                 stop_btn = gr.Button("Stop Server", elem_classes="small-btn")
             restart_status = gr.Markdown(visible=False)
             def show_restarting():
-                return gr.update(visible=True), "Restarting server... Please reload your browser in a few seconds."
+                return "Restarting server..."
+            restart_btn.click(fn=restart_server, outputs=[restart_status])
             restart_btn.click(fn=restart_server, outputs=[])
             restart_btn.click(fn=show_restarting, outputs=[restart_status])
             def stop_server():
@@ -550,9 +575,150 @@ audio:-webkit-media-controls-play-button {
 
 allowed_paths = get_allowed_paths()
 
+# --- Hybrid API (FastAPI) endpoints ---
+from fastapi import FastAPI
+from fastapi.responses import Response, FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import mimetypes
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI()
+
+# Mount /static for player assets (JS, CSS, HTML)
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+
+if not os.path.exists(static_dir):
+    os.makedirs(static_dir)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Allow CORS for all origins (for development, restrict in production)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Helper to get cover art path (if any)
+def get_cover_path(filepath):
+    # Look for cover.jpg/png in the same folder, or embedded cover in tags
+    folder = os.path.dirname(filepath)
+    for name in ["cover.jpg", "cover.png", "folder.jpg", "folder.png"]:
+        test_path = os.path.join(folder, name)
+        if os.path.isfile(test_path):
+            return test_path
+    # Embedded cover art: not implemented here (mutagen can extract, but needs more logic)
+    return None
+
+# API: /playlist - returns all songs with metadata, lyrics, and cover art URL
+@app.get("/playlist")
+def playlist_api():
+    playlist = []
+    for idx, f in enumerate(player.playlist):
+        tags = player.tags_cache.get(f) or get_tags(f)
+        title = tags.get('title', os.path.basename(f))
+        artist = tags.get('artist', '')
+        album = tags.get('album', '')
+        genres = tags.get('genres', [])
+        lyrics = tags.get('lyrics', '') or tags.get('lyric', '')
+        cover_url = None
+        cover_path = get_cover_path(f)
+        if cover_path:
+            cover_url = f"/cover/{idx}"
+        playlist.append({
+            "index": idx,
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "genres": genres,
+            "audio_url": f"/audio/{idx}",
+            "lyrics_url": f"/lyrics/{idx}",
+            "cover_url": cover_url
+        })
+    return JSONResponse(playlist)
+
+# API: /audio/{idx} - serves audio file by playlist index
+@app.get("/audio/{idx}")
+def audio_file(idx: int):
+    try:
+        f = player.playlist[idx]
+        ext = os.path.splitext(f)[1].lower()
+        mime = mimetypes.types_map.get(ext, "audio/mpeg")
+        return FileResponse(f, media_type=mime, filename=os.path.basename(f))
+    except Exception:
+        return Response(status_code=404)
+
+# API: /lyrics/{idx} - returns lyrics for song (try cache, else fetch)
+@app.get("/lyrics/{idx}")
+def lyrics_api(idx: int):
+    try:
+        f = player.playlist[idx]
+        tags = player.tags_cache.get(f) or get_tags(f)
+        artist = tags.get('artist', '')
+        title = tags.get('title', os.path.basename(f))
+        lyrics = tags.get('lyrics', '') or tags.get('lyric', '')
+        if not lyrics and artist and title:
+            lyrics = fetch_lyrics(artist, title)
+        return JSONResponse({"lyrics": lyrics or ""})
+    except Exception:
+        return JSONResponse({"lyrics": ""})
+
+# API: /cover/{idx} - serves cover art image if found
+@app.get("/cover/{idx}")
+def cover_api(idx: int):
+    try:
+        f = player.playlist[idx]
+        cover_path = get_cover_path(f)
+        if cover_path:
+            ext = os.path.splitext(cover_path)[1].lower()
+            mime = mimetypes.types_map.get(ext, "image/jpeg")
+            return FileResponse(cover_path, media_type=mime)
+    except Exception:
+        pass
+    return Response(status_code=404)
+
+# API: /pick_songs - pick a new random playlist
+from fastapi import Request
+@app.post("/pick_songs")
+async def pick_songs_api(request: Request):
+    data = await request.json()
+    count = data.get("count", 10)
+    genres = data.get("genres")
+    # Call the existing pick_songs function
+    pick_songs(count, genres)
+    # Return the new playlist (same format as /playlist)
+    playlist = []
+    for idx, f in enumerate(player.playlist):
+        tags = player.tags_cache.get(f) or get_tags(f)
+        title = tags.get('title', os.path.basename(f))
+        artist = tags.get('artist', '')
+        album = tags.get('album', '')
+        genres = tags.get('genres', [])
+        cover_url = None
+        cover_path = get_cover_path(f)
+        if cover_path:
+            cover_url = f"/cover/{idx}"
+        playlist.append({
+            "index": idx,
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "genres": genres,
+            "audio_url": f"/audio/{idx}",
+            "lyrics_url": f"/lyrics/{idx}",
+            "cover_url": cover_url
+        })
+    return JSONResponse(playlist)
+
+# Mount Gradio UI at /gradio
+app = gr.mount_gradio_app(app, demo, path="/gradio")
+
+# --- End Hybrid API endpoints ---
+
 # Inject favicon using custom HTML
 favicon_html = """
 <link rel=\"icon\" type=\"image/x-icon\" href=\"favicon.ico\">\n"""
 gr.HTML(favicon_html)
 
-demo.launch(allowed_paths=allowed_paths, inbrowser=True, server_name="0.0.0.0", server_port=7860)
+# Run with: uvicorn music_player_gradio:app --host 0.0.0.0 --port 7860

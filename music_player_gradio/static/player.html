@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WaveSurfer Music Player</title>
+    <!-- Inter font for Gradio match -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Inter font for Gradio match -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- WaveSurfer.js CDN -->
+    <script src="https://unpkg.com/wavesurfer.js@7.7.0/dist/wavesurfer.min.js"></script>
+    <style>
+        body {
+            font-family: system-ui, Arial, sans-serif;
+            margin: 0; padding: 0;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        body.theme-light {
+            background: #f8f9fa; color: #222;
+        }
+        body.theme-dark {
+            background: #181825; color: #fff;
+        }
+        .player-container {
+            max-width: 900px;
+            width: 100vw;
+            min-height: 0;
+            height: auto;
+            box-sizing: border-box;
+            padding: 1rem;
+            margin: 0 auto;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(80,80,120,0.04);
+        }
+        body.theme-light .player-container {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+        }
+        body.theme-dark .player-container {
+            background: #232336;
+            border: 1px solid #39395a;
+        }
+        .waveform {
+            width: 100%;
+            height: 96px;
+            margin: 0.5rem 0 1rem 0;
+            border-radius: 8px;
+        }
+        body.theme-light .waveform {
+            background: #f3f4f6;
+        }
+        body.theme-dark .waveform {
+            background: #232336;
+        }
+        .controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1rem;
+        }
+        .controls button, .controls input[type=range] {
+            border-radius: 6px;
+            padding: 0.5em 1em; font-size: 1.07em;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s;
+        }
+        body.theme-light .controls button, body.theme-light .controls input[type=range] {
+            background: #ede9fe; color: #222; border: 1px solid #e5e7eb;
+        }
+        body.theme-dark .controls button, body.theme-dark .controls input[type=range] {
+            background: #2a2a40; color: #fff; border: 1px solid #39395a;
+        }
+        body.theme-light .controls button.active,
+        body.theme-light .controls button:active,
+        body.theme-light .controls button:hover {
+            background: #a78bfa !important; color: #fff !important;
+        }
+        body.theme-dark .controls button.active,
+        body.theme-dark .controls button:active,
+        body.theme-dark .controls button:hover {
+            background: #a78bfa !important; color: #232336 !important;
+        }
+        .controls input[type=range] {
+            width: 100px;
+        }
+        .info {
+            display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start;
+            margin-bottom: 1rem;
+        }
+        .cover {
+            width: 120px; height: 120px; object-fit: cover; border-radius: 8px;
+        }
+        body.theme-light .cover {
+            background: #e5e7eb;
+        }
+        body.theme-dark .cover {
+            background: #39395a;
+        }
+        .meta {
+            flex: 1 1 200px;
+        }
+        .meta h2 {
+            margin: 0 0 0.2em 0; font-size: 1.4em;
+        }
+        body.theme-light .meta h2 {
+            color: #222;
+        }
+        body.theme-dark .meta h2 {
+            color: #fff;
+        }
+        .meta h3 {
+            margin: 0 0 0.2em 0; font-size: 1.1em; font-weight: normal;
+        }
+        body.theme-light .meta h3 {
+            color: #888;
+        }
+        body.theme-dark .meta h3 {
+            color: #bbb;
+        }
+        .meta .genres {
+            font-size: 0.95em; color: #6c63ff; margin-bottom: 0.5em;
+        }
+        .lyrics {
+            border-radius: 8px; padding: 1em; margin-bottom: 1em;
+            max-height: 180px; overflow-y: auto; font-size: 1em;
+        }
+        html, body {
+            min-height: 0;
+            height: auto;
+            box-sizing: border-box;
+        }
+        /* Custom scrollbar for light theme */
+        body.theme-light ::-webkit-scrollbar {
+            width: 10px;
+            background: #f3f4f6;
+        }
+        body.theme-light ::-webkit-scrollbar-thumb {
+            background: #e5e7eb;
+            border-radius: 8px;
+        }
+        body.theme-light ::-webkit-scrollbar-thumb:hover {
+            background: #cbd5e1;
+        }
+        /* Custom scrollbar for dark theme */
+        body.theme-dark ::-webkit-scrollbar {
+            width: 10px;
+            background: #232336;
+        }
+        body.theme-dark ::-webkit-scrollbar-thumb {
+            background: #39395a;
+            border-radius: 8px;
+        }
+        body.theme-dark ::-webkit-scrollbar-thumb:hover {
+            background: #6c63ff;
+        }
+        /* For Firefox */
+        body.theme-light {
+            scrollbar-color: #e5e7eb #f3f4f6;
+        }
+        body.theme-dark {
+            scrollbar-color: #39395a #232336;
+        }
+        body.theme-light .lyrics {
+            background: #f8f9fa; border: 1px solid #e5e7eb; color: #333;
+        }
+        body.theme-dark .lyrics {
+            background: #232336; border: 1px solid #39395a; color: #fff;
+        }
+        .playlist {
+            width: 100%;
+            border-radius: 8px;
+            margin-bottom: 1em;
+            /* Only show scrollbar if needed */
+            overflow-x: auto;
+            overflow-y: visible;
+            max-height: 600px;
+            font-family: 'Inter', system-ui, Arial, sans-serif;
+        }
+        .playlist table, .playlist th, .playlist td, .playlist tr {
+            font-family: 'Inter', system-ui, Arial, sans-serif !important;
+        }
+        body.theme-light .playlist {
+            background: #fff; border: 1px solid #e5e7eb;
+        }
+        body.theme-dark .playlist {
+            background: #232336; border: 1px solid #39395a;
+        }
+        .playlist th, .playlist td, .playlist tr {
+            color: #8e929b !important;
+        }
+        .playlist table {
+            width: 100%; border-collapse: collapse; font-size: 1em;
+        }
+        .playlist th, .playlist td {
+            padding: 0.5em 0.7em;
+            text-align: left;
+        }
+        body.theme-light .playlist th {
+            background: #f3f4f6;
+            color: #6c63ff;
+        }
+        body.theme-dark .playlist th {
+            background: #181825; color: #6c63ff;
+        }
+        .playlist tr.selected {
+            background: #6c63ff !important; color: #fff;
+        }
+        .playlist tr {
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        body.theme-light .playlist tr:hover {
+            background: #ededfa;
+        }
+        body.theme-dark .playlist tr:hover {
+            background: #2a2a40;
+        }
+        @media (max-width: 600px) {
+            .info { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+            .cover { width: 80px; height: 80px; }
+            .meta h2 { font-size: 1.1em; }
+        }
+
+        /* DARK THEME SUPPORT */
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: #181825; color: #fff;
+            }
+            .player-container {
+                background: #232336;
+                border: 1px solid #39395a;
+                box-shadow: 0 2px 12px rgba(20,20,40,0.18);
+            }
+            .waveform {
+                background: #232336;
+            }
+            .controls button, .controls input[type=range] {
+                background: #2a2a40; color: #fff; border: 1px solid #39395a;
+            }
+            .controls button.active, .controls button:active, .controls button:hover {
+                background: #6c63ff; color: #fff;
+            }
+            .cover {
+                background: #39395a;
+            }
+            .meta h2 {
+                color: #fff;
+            }
+            .meta h3 {
+                color: #bbb;
+            }
+            .meta .genres {
+                color: #6c63ff;
+            }
+            .lyrics {
+                background: #232336; border: 1px solid #39395a; color: #fff;
+            }
+            .playlist {
+                background: #232336; border: 1px solid #39395a;
+            }
+            .playlist th {
+                background: #181825; color: #6c63ff;
+            }
+            .playlist tr.selected {
+                background: #6c63ff !important; color: #fff;
+            }
+            .playlist tr:hover {
+                background: #2a2a40;
+            }
+        }
+    </style>
+    <script>
+    // Listen for theme message from parent
+    function setTheme(theme) {
+        document.body.classList.remove('theme-dark', 'theme-light');
+        document.body.classList.add('theme-' + theme);
+    }
+    window.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'set-theme') {
+            setTheme(event.data.theme);
+        }
+    });
+    // Default: set theme based on system
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    setTheme(prefersDark ? 'dark' : 'light');
+    </script>
+</head>
+<body>
+<div style="text-align:center;font-size:0.98em;color:#7ff;">Playlist auto-refreshes every 5 seconds after picking new songs in Music Library.<br>Or click <b>Refresh Playlist</b> below to update instantly.</div>
+<div class="player-container">
+    <button id="refresh" style="margin-bottom:1em;background:#0af;color:#fff;padding:0.5em 1.2em;border:none;border-radius:5px;font-size:1em;cursor:pointer;">🔄 Refresh Playlist</button>
+    <div class="info">
+        <img class="cover" id="cover" src="" alt="Cover" />
+        <div class="meta">
+            <h2 id="title">Title</h2>
+            <h3 id="artist">Artist</h3>
+            <div class="genres" id="genres"></div>
+        </div>
+    </div>
+    <div id="waveform" class="waveform"></div>
+    <div class="controls">
+        <button id="prev">⏮️</button>
+        <button id="play">▶️</button>
+        <button id="next">⏭️</button>
+        <button id="shuffle">🔀</button>
+        <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8" title="Volume" />
+        <span id="current-time">0:00</span> / <span id="duration">0:00</span>
+    </div>
+    <div class="lyrics" id="lyrics">Lyrics will appear here.</div>
+    <div class="playlist" id="playlist"></div>
+</div>
+<script>
+const API_BASE = window.location.origin;
+let playlist = [];
+let currentIdx = 0;
+let isPlaying = false;
+let shuffleMode = false;
+let wavesurfer;
+let shuffleOrder = [];
+
+function sec2str(sec) {
+    sec = Math.floor(sec);
+    return `${Math.floor(sec/60)}:${('0'+(sec%60)).slice(-2)}`;
+}
+
+function updateMeta(song) {
+    document.getElementById('title').textContent = song.title || 'Unknown Title';
+    document.getElementById('artist').textContent = song.artist || '';
+    document.getElementById('genres').textContent = song.genres && song.genres.length ? song.genres.join(', ') : '';
+    document.getElementById('cover').src = song.cover_url ? API_BASE + song.cover_url : '';
+}
+
+function updateLyrics(idx) {
+    const lyricsDiv = document.getElementById('lyrics');
+    lyricsDiv.textContent = 'Loading lyrics...';
+    fetch(API_BASE + playlist[idx].lyrics_url)
+        .then(r => r.json())
+        .then(data => {
+            lyricsDiv.textContent = data.lyrics ? data.lyrics : 'No lyrics found.';
+        }).catch(() => lyricsDiv.textContent = 'No lyrics found.');
+}
+
+function updatePlaylistUI() {
+    const plDiv = document.getElementById('playlist');
+    let html = '<table><thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th></tr></thead><tbody>';
+    playlist.forEach((song, idx) => {
+        html += `<tr data-idx="${idx}"${idx===currentIdx?' class="selected"':''}><td>${idx+1}</td><td>${song.title||''}</td><td>${song.artist||''}</td><td>${song.album||''}</td></tr>`;
+    });
+    html += '</tbody></table>';
+    plDiv.innerHTML = html;
+    document.querySelectorAll('.playlist tr[data-idx]').forEach(tr => {
+        tr.onclick = () => {
+            loadSong(parseInt(tr.dataset.idx), true);
+        };
+    });
+}
+
+function getPlayOrder() {
+    if (!shuffleMode) return [...Array(playlist.length).keys()];
+    if (shuffleOrder.length !== playlist.length) {
+        shuffleOrder = [...Array(playlist.length).keys()];
+        for (let i = shuffleOrder.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffleOrder[i], shuffleOrder[j]] = [shuffleOrder[j], shuffleOrder[i]];
+        }
+    }
+    return shuffleOrder;
+}
+
+function getNextIdx() {
+    const order = getPlayOrder();
+    let idx = order.indexOf(currentIdx);
+    if (idx === -1 || idx+1 >= order.length) return order[0];
+    return order[idx+1];
+}
+
+function getPrevIdx() {
+    const order = getPlayOrder();
+    let idx = order.indexOf(currentIdx);
+    if (idx <= 0) return order[order.length-1];
+    return order[idx-1];
+}
+
+function loadSong(idx, autoplay) {
+    if (!playlist.length) return;
+    currentIdx = idx;
+    const song = playlist[currentIdx];
+    updateMeta(song);
+    updateLyrics(currentIdx);
+    updatePlaylistUI();
+    if (wavesurfer) {
+        wavesurfer.destroy();
+    }
+    wavesurfer = WaveSurfer.create({
+        container: '#waveform',
+        waveColor: '#0af',
+        progressColor: '#0a8',
+        height: 80,
+        responsive: true,
+        barWidth: 2,
+        cursorColor: '#fff',
+        backend: 'mediaelement',
+    });
+    wavesurfer.load(API_BASE + song.audio_url);
+    wavesurfer.setVolume(parseFloat(document.getElementById('volume').value));
+    wavesurfer.on('ready', () => {
+        document.getElementById('duration').textContent = sec2str(wavesurfer.getDuration());
+        if (autoplay) {
+            wavesurfer.play();
+            isPlaying = true;
+            document.getElementById('play').textContent = '⏸️';
+        } else {
+            isPlaying = false;
+            document.getElementById('play').textContent = '▶️';
+        }
+    });
+    wavesurfer.on('audioprocess', () => {
+        document.getElementById('current-time').textContent = sec2str(wavesurfer.getCurrentTime());
+    });
+    wavesurfer.on('seek', () => {
+        document.getElementById('current-time').textContent = sec2str(wavesurfer.getCurrentTime());
+    });
+    wavesurfer.on('finish', () => {
+        playNext();
+    });
+}
+
+function playPause() {
+    if (!wavesurfer) return;
+    if (isPlaying) {
+        wavesurfer.pause();
+        isPlaying = false;
+        document.getElementById('play').textContent = '▶️';
+    } else {
+        wavesurfer.play();
+        isPlaying = true;
+        document.getElementById('play').textContent = '⏸️';
+    }
+}
+
+function playNext() {
+    loadSong(getNextIdx(), true);
+}
+
+function playPrev() {
+    loadSong(getPrevIdx(), true);
+}
+
+document.getElementById('play').onclick = playPause;
+document.getElementById('next').onclick = playNext;
+document.getElementById('prev').onclick = playPrev;
+document.getElementById('shuffle').onclick = function() {
+    shuffleMode = !shuffleMode;
+    this.classList.toggle('active', shuffleMode);
+    shuffleOrder = [];
+    updatePlaylistUI();
+};
+document.getElementById('volume').oninput = function() {
+    if (wavesurfer) wavesurfer.setVolume(parseFloat(this.value));
+};
+
+// --- Playlist Refresh Logic ---
+const AUTO_REFRESH_INTERVAL = 5000; // ms
+let lastPlaylistSignature = '';
+
+function playlistSignature(pl) {
+    // Use song titles and artists for a simple signature
+    return pl.map(s => (s.title||'')+':' + (s.artist||'')).join('|');
+}
+
+function reloadPlaylist(keepCurrent) {
+    fetch(API_BASE + '/playlist')
+        .then(r => r.json())
+        .then(data => {
+            const sig = playlistSignature(data);
+            if (sig !== lastPlaylistSignature) {
+                playlist = data;
+                lastPlaylistSignature = sig;
+                let idx = keepCurrent ? currentIdx : 0;
+                if (idx >= playlist.length) idx = 0;
+                loadSong(idx, false);
+                updatePlaylistUI();
+            }
+        });
+}
+
+document.getElementById('refresh').onclick = function() {
+    reloadPlaylist(false);
+};
+
+// Initial load
+reloadPlaylist(false);
+
+// Auto-refresh every 5 seconds
+setInterval(() => reloadPlaylist(true), AUTO_REFRESH_INTERVAL);
+</script>
+</body>
+</html>
