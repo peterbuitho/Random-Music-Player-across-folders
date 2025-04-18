@@ -286,8 +286,44 @@
             setTheme(event.data.theme);
         }
         else if (event.data && event.data.type === 'refresh-and-play') {
-            // Refresh playlist and auto-play
-            reloadPlaylist(false, true);
+            const timestamp = event.data.timestamp || Date.now();
+            const newPlaylist = event.data.newPlaylist || false;
+            const source = event.data.source || 'unknown';
+            
+            console.log(`Received refresh-and-play message from parent: source=${source}, timestamp=${timestamp}`);
+            
+            // Force a server request for the latest playlist with cache-busting timestamp
+            fetch(`${API_BASE}/playlist?force_refresh=1&ts=${timestamp}&source=${source}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Successfully fetched fresh playlist data');
+                    
+                    // Process playlist data
+                    const playlist_data = Array.isArray(data) ? data : data.playlist || [];
+                    
+                    console.log(`Received ${playlist_data.length} songs in playlist`);
+                    if (playlist_data.length > 0) {
+                        console.log('First song title:', playlist_data[0].title);
+                    }
+                    
+                    // Update our playlist
+                    playlist = playlist_data;
+                    
+                    // Update the UI
+                    updatePlaylistUI();
+                    
+                    // Always play first song on refresh-and-play command
+                    if (playlist.length > 0) {
+                        console.log('Loading and playing first song automatically');
+                        setTimeout(() => loadAndPlaySong(0), 100);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching playlist:', error);
+                    
+                    // Fallback to refreshPlaylist as a last resort
+                    refreshPlaylist(true);
+                });
         }
     });
     // Default: set theme based on system
@@ -321,13 +357,13 @@
 </div>
 <script>
 const API_BASE = window.location.origin;
-let playlist = [];
-let currentIdx = 0;
+let wavesurfer = null;
 let isPlaying = false;
+let currentIdx = 0;
+let playlist = [];
 let shuffleMode = false;
-let wavesurfer;
-let shuffleOrder = [];
 
+// Basic utilities
 function sec2str(sec) {
     sec = Math.floor(sec);
     return `${Math.floor(sec/60)}:${('0'+(sec%60)).slice(-2)}`;
@@ -343,69 +379,82 @@ function updateMeta(song) {
 function updateLyrics(idx) {
     const lyricsDiv = document.getElementById('lyrics');
     lyricsDiv.textContent = 'Loading lyrics...';
+    if (!playlist[idx] || !playlist[idx].lyrics_url) {
+        lyricsDiv.textContent = 'No lyrics available.';
+        return;
+    }
+    
     fetch(API_BASE + playlist[idx].lyrics_url)
         .then(r => r.json())
         .then(data => {
             const raw = data.lyrics || '';
-            // unify CRLF/CR to LF
-            const normalized = raw.replace(/\r\n?/g, '\n');
-            // collapse multiple blank lines to single
-            const text = normalized.replace(/\n{2,}/g, '\n');
+            const text = raw.replace(/\r\n?/g, '\n').replace(/\n{2,}/g, '\n');
             lyricsDiv.textContent = text || 'No lyrics found.';
-        }).catch(() => lyricsDiv.textContent = 'No lyrics found.');
+        })
+        .catch(() => {
+            lyricsDiv.textContent = 'Could not load lyrics.';
+        });
 }
 
 function updatePlaylistUI() {
     const plDiv = document.getElementById('playlist');
     let html = '<table><thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th></tr></thead><tbody>';
-    playlist.forEach((song, idx) => {
-        html += `<tr data-idx="${idx}"${idx===currentIdx?' class="selected"':''}><td>${idx+1}</td><td>${song.title||''}</td><td>${song.artist||''}</td><td>${song.album||''}</td></tr>`;
-    });
+    
+    if (playlist.length === 0) {
+        html += '<tr><td colspan="4">No songs in playlist</td></tr>';
+    } else {
+        playlist.forEach((song, idx) => {
+            html += `<tr data-idx="${idx}"${idx===currentIdx?' class="selected"':''}><td>${idx+1}</td><td>${song.title||''}</td><td>${song.artist||''}</td><td>${song.album||''}</td></tr>`;
+        });
+    }
+    
     html += '</tbody></table>';
     plDiv.innerHTML = html;
+    
+    // Add click handlers to playlist items
     document.querySelectorAll('.playlist tr[data-idx]').forEach(tr => {
         tr.onclick = () => {
-            loadSong(parseInt(tr.dataset.idx), true);
+            const idx = parseInt(tr.dataset.idx);
+            console.log(`Clicked on playlist item ${idx}`);
+            loadAndPlaySong(idx);
         };
     });
 }
 
-function getPlayOrder() {
-    if (!shuffleMode) return [...Array(playlist.length).keys()];
-    if (shuffleOrder.length !== playlist.length) {
-        shuffleOrder = [...Array(playlist.length).keys()];
-        for (let i = shuffleOrder.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [shuffleOrder[i], shuffleOrder[j]] = [shuffleOrder[j], shuffleOrder[i]];
-        }
+// Main playback functions - simplified to ensure reliability
+function loadAndPlaySong(idx) {
+    if (!playlist || playlist.length === 0) {
+        console.log('Cannot play - playlist is empty');
+        return;
     }
-    return shuffleOrder;
-}
-
-function getNextIdx() {
-    const order = getPlayOrder();
-    let idx = order.indexOf(currentIdx);
-    if (idx === -1 || idx+1 >= order.length) return order[0];
-    return order[idx+1];
-}
-
-function getPrevIdx() {
-    const order = getPlayOrder();
-    let idx = order.indexOf(currentIdx);
-    if (idx <= 0) return order[order.length-1];
-    return order[idx-1];
-}
-
-function loadSong(idx, autoplay) {
-    if (!playlist.length) return;
+    
+    // Validate index
+    if (idx < 0 || idx >= playlist.length) {
+        console.log(`Invalid index ${idx}, defaulting to 0`);
+        idx = 0;
+    }
+    
     currentIdx = idx;
     const song = playlist[currentIdx];
+    if (!song || !song.audio_url) {
+        console.log('Invalid song data');
+        return;
+    }
+    
+    console.log(`Loading song: ${song.title} by ${song.artist}`);
+    
+    // Update UI first
     updateMeta(song);
     updateLyrics(currentIdx);
     updatePlaylistUI();
+    
+    // Clean up existing player
     if (wavesurfer) {
         wavesurfer.destroy();
+        wavesurfer = null;
     }
+    
+    // Create new player
     wavesurfer = WaveSurfer.create({
         container: '#waveform',
         waveColor: '#0af',
@@ -414,108 +463,318 @@ function loadSong(idx, autoplay) {
         responsive: true,
         barWidth: 2,
         cursorColor: '#fff',
-        backend: 'mediaelement',
+        backend: 'mediaelement'
     });
-    wavesurfer.load(API_BASE + song.audio_url);
-    wavesurfer.setVolume(parseFloat(document.getElementById('volume').value));
+    
+    // Set up event listeners
     wavesurfer.on('ready', () => {
         document.getElementById('duration').textContent = sec2str(wavesurfer.getDuration());
-        if (autoplay) {
-            wavesurfer.play();
-            isPlaying = true;
-            document.getElementById('play').textContent = '⏸️';
-        } else {
-            isPlaying = false;
-            document.getElementById('play').textContent = '▶️';
-        }
+        wavesurfer.play();
+        isPlaying = true;
+        document.getElementById('play').textContent = '⏸️';
+        console.log('Song playing');
     });
+    
     wavesurfer.on('audioprocess', () => {
         document.getElementById('current-time').textContent = sec2str(wavesurfer.getCurrentTime());
     });
-    wavesurfer.on('seek', () => {
-        document.getElementById('current-time').textContent = sec2str(wavesurfer.getCurrentTime());
-    });
+    
     wavesurfer.on('finish', () => {
-        playNext();
+        playNextSong();
     });
+    
+    wavesurfer.on('error', () => {
+        console.log('Error loading audio, trying next song');
+        playNextSong();
+    });
+    
+    // Use direct URL without cache busting to ensure stable playback
+    const audioUrl = API_BASE + song.audio_url;
+    console.log(`Loading audio from ${audioUrl}`);
+    
+    // Load the audio and set volume
+    wavesurfer.load(audioUrl);
+    wavesurfer.setVolume(parseFloat(document.getElementById('volume').value));
 }
 
+// Simple control functions
 function playPause() {
-    if (!wavesurfer) return;
+    console.log('Play/Pause button clicked');
+    
+    if (!wavesurfer) {
+        console.log('WaveSurfer not initialized, loading first song if available');
+        if (playlist && playlist.length > 0) {
+            loadAndPlaySong(0);
+        }
+        return;
+    }
+    
     if (isPlaying) {
+        console.log('Pausing playback');
         wavesurfer.pause();
         isPlaying = false;
-        document.getElementById('play').textContent = '▶️';
+        document.getElementById('play').textContent = '▷';
     } else {
+        console.log('Starting playback');
         wavesurfer.play();
         isPlaying = true;
         document.getElementById('play').textContent = '⏸️';
     }
 }
 
-function playNext() {
-    loadSong(getNextIdx(), true);
+function playNextSong() {
+    if (!playlist || playlist.length === 0) return;
+    
+    let nextIdx = currentIdx + 1;
+    if (shuffleMode) {
+        // Get random song that's not the current one
+        const availableIndices = [...Array(playlist.length).keys()].filter(i => i !== currentIdx);
+        if (availableIndices.length > 0) {
+            nextIdx = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+        }
+    }
+    
+    // Loop back to the beginning if we reached the end
+    if (nextIdx >= playlist.length) {
+        nextIdx = 0;
+    }
+    
+    // Load and play the next song
+    loadAndPlaySong(nextIdx);
 }
 
-function playPrev() {
-    loadSong(getPrevIdx(), true);
+function playPrevSong() {
+    if (!playlist || playlist.length === 0) return;
+    
+    let prevIdx = currentIdx - 1;
+    if (prevIdx < 0) {
+        prevIdx = playlist.length - 1; // Wrap to end of playlist
+    }
+    
+    loadAndPlaySong(prevIdx);
 }
 
+// Connect UI elements
 document.getElementById('play').onclick = playPause;
-document.getElementById('next').onclick = playNext;
-document.getElementById('prev').onclick = playPrev;
+document.getElementById('next').onclick = playNextSong;
+document.getElementById('prev').onclick = playPrevSong;
 document.getElementById('shuffle').onclick = function() {
     shuffleMode = !shuffleMode;
     this.classList.toggle('active', shuffleMode);
-    shuffleOrder = [];
-    updatePlaylistUI();
+    console.log(`Shuffle mode: ${shuffleMode ? 'on' : 'off'}`);
 };
 document.getElementById('volume').oninput = function() {
     if (wavesurfer) wavesurfer.setVolume(parseFloat(this.value));
 };
 
-// --- Playlist Refresh Logic ---
-const AUTO_REFRESH_INTERVAL = 5000; // ms
-let lastPlaylistSignature = '';
-
-function playlistSignature(pl) {
-    // Use song titles and artists for a simple signature
-    return pl.map(s => (s.title||'')+':' + (s.artist||'')).join('|');
-}
-
-function reloadPlaylist(keepCurrent, forceAutoplay = false) {
-    fetch(API_BASE + '/playlist')
-        .then(r => r.json())
+// Refresh button handler - just refresh current playlist
+document.getElementById('refresh').onclick = function() {
+    // Don't request a new playlist, just refresh the current one
+    fetch(`${API_BASE}/playlist?nocache=${Date.now()}`)
+        .then(response => response.json())
         .then(data => {
-            // Handle the new API response format
-            let playlistData = Array.isArray(data) ? data : data.playlist;
-            // Check for autoplay flag in the API response or use the forceAutoplay parameter
-            let shouldAutoplay = (data.autoplay === true) || forceAutoplay;
+            console.log('Refreshed current playlist');
             
-            // Log for debugging
-            console.log('Playlist loaded, autoplay:', shouldAutoplay);
+            // Process playlist data
+            const newPlaylist = Array.isArray(data) ? data : data.playlist || [];
             
-            const sig = playlistSignature(playlistData);
-            if (sig !== lastPlaylistSignature) {
-                playlist = playlistData;
-                lastPlaylistSignature = sig;
-                let idx = keepCurrent ? currentIdx : 0;
-                if (idx >= playlist.length) idx = 0;
-                loadSong(idx, shouldAutoplay);
-                updatePlaylistUI();
+            // Update our playlist
+            playlist = newPlaylist;
+            
+            // Update the UI
+            updatePlaylistUI();
+            
+            // Don't change what's playing, but make sure UI reflects current state
+            if (wavesurfer && isPlaying) {
+                document.getElementById('play').textContent = '⏸️';
             }
+        })
+        .catch(error => {
+            console.error('Failed to refresh playlist:', error);
+        });
+};
+
+// ENHANCED PLAYLIST REFRESH LOGIC
+function refreshPlaylist(autoplay = false) {
+    console.log(`Refreshing playlist with autoplay=${autoplay}`);
+    
+    // Add timestamp to prevent caching
+    const timestamp = Date.now() + Math.random();
+    
+    // If we're currently playing, remember that
+    const wasPlaying = isPlaying;
+    
+    // Log more information about the request
+    console.log(`Fetching playlist from ${API_BASE}/playlist with timestamp ${timestamp}`);
+    
+    // Add cache-busting parameter and source information
+    fetch(`${API_BASE}/playlist?ts=${timestamp}&refresh=1&source=player&force_refresh=1`)
+        .then(response => {
+            console.log(`Playlist response status: ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            // Extract playlist and autoplay flag
+            const newPlaylist = Array.isArray(data) ? data : data.playlist || [];
+            const serverAutoplay = typeof data === 'object' && data.autoplay === true;
+            
+            // Override autoplay if passed from parent or URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlAutoplay = urlParams.has('autoplay');
+            
+            // Only autoplay if specifically requested, URL indicates, or server says to
+            const shouldAutoplay = autoplay || serverAutoplay || urlAutoplay;
+            
+            console.log(`Got ${newPlaylist.length} songs, autoplay: ${shouldAutoplay}`);
+            if (newPlaylist.length > 0) {
+                console.log('First song:', newPlaylist[0].title);
+            }
+            
+            // Update our playlist
+            playlist = newPlaylist;
+            
+            // Update the UI
+            updatePlaylistUI();
+            
+            if (shouldAutoplay && playlist.length > 0) {
+                console.log('Auto-playing first song');
+                // If autoplay requested, load and play first song
+                if (wavesurfer) {
+                    try {
+                        wavesurfer.pause();
+                    } catch (e) {
+                        console.error('Error pausing wavesurfer:', e);
+                    }
+                }
+                isPlaying = false;
+                setTimeout(() => loadAndPlaySong(0), 100);
+            } else if (wasPlaying && wavesurfer) {
+                // If we were playing and this is just a refresh, continue playing
+                try {
+                    wavesurfer.play();
+                    isPlaying = true;
+                    document.getElementById('play').textContent = '⏸️';
+                } catch (e) {
+                    console.error('Error resuming playback:', e);
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Failed to load playlist:', error);
         });
 }
 
-document.getElementById('refresh').onclick = function() {
-    reloadPlaylist(false, true); // Auto-play when manually refreshing
-};
+// Handle the refresh-and-play message
+window.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'set-theme') {
+        setTheme(event.data.theme);
+    }
+    else if (event.data && event.data.type === 'refresh-and-play') {
+        // Log the message with timestamp if present
+        const timestamp = event.data.timestamp || 'none';
+        const newPlaylist = event.data.newPlaylist || false; // Check if we need a new playlist
+        
+        console.log(`Received refresh-and-play message with timestamp: ${timestamp}, newPlaylist: ${newPlaylist}`);
+        
+        // Completely reset player state
+        if (wavesurfer) {
+            try {
+                wavesurfer.pause();
+                wavesurfer.destroy();
+            } catch (e) {
+                console.error('Error cleaning up wavesurfer:', e);
+            }
+            wavesurfer = null;
+        }
+        
+        // Reset state completely
+        isPlaying = false;
+        currentIdx = -1;
+        playlist = [];
+        
+        // If this is from pick_songs, ask for a new playlist
+        // If this is just a refresh, don't request a new playlist
+        const urlParams = newPlaylist ? `?nocache=${timestamp}&new_playlist=1` : `?nocache=${timestamp}`;
+        
+        // Force a fresh fetch with timestamp to bypass caching completely
+        fetch(`${API_BASE}/playlist${urlParams}`)
+            .then(response => response.json())
+            .then(data => {
+                if (newPlaylist) {
+                    console.log('Got completely fresh playlist data');
+                } else {
+                    console.log('Refreshed existing playlist');
+                }
+                
+                // Process new playlist
+                const newPlaylist = Array.isArray(data) ? data : data.playlist || [];
+                
+                // Log the first few songs to verify 
+                if (newPlaylist.length > 0) {
+                    console.log('Playlist first songs:', 
+                        newPlaylist.slice(0, 3).map(s => s.title));
+                }
+                
+                // Update playlist and UI
+                playlist = newPlaylist;
+                updatePlaylistUI();
+                
+                // Always play the first song when refreshing
+                if (playlist.length > 0) {
+                    setTimeout(() => loadAndPlaySong(0), 100);
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching playlist:', error);
+            });
+    }
+});
 
-// Initial load
-reloadPlaylist(false, false); // Don't auto-play on initial load
+// Disable auto-refresh to prevent playback interruptions
+// We'll rely on manual refresh button instead
 
-// Auto-refresh every 5 seconds
-setInterval(() => reloadPlaylist(true, false), AUTO_REFRESH_INTERVAL); // Don't auto-play on background refresh
+// Initialize player with empty state
+playlist = [];
+updatePlaylistUI();
+document.getElementById('title').textContent = 'Select songs to play';
+document.getElementById('artist').textContent = 'Use Pick Songs or Chat';
+document.getElementById('genres').textContent = '';
+document.getElementById('current-time').textContent = '0:00';
+document.getElementById('duration').textContent = '0:00';
+console.log('Player initialized with empty playlist');
+
+// Set default volume
+document.getElementById('volume').value = 0.75;
+
+// Check URL for refresh parameters
+const urlParams = new URLSearchParams(window.location.search);
+const shouldRefresh = urlParams.has('refresh');
+const timestamp = urlParams.get('ts') || Date.now();
+
+console.log(`URL params - refresh: ${shouldRefresh}, timestamp: ${timestamp}`);
+
+// Initial playlist check with autoplay if refresh is requested
+refreshPlaylist(shouldRefresh);
+
+// Set up automatic playlist refresh every 5 seconds
+let lastPlaylistCheck = Date.now();
+
+// Auto-refresh interval function
+const autoRefreshInterval = setInterval(() => {
+    const now = Date.now();
+    const timeSinceLastCheck = now - lastPlaylistCheck;
+    
+    // Only refresh if we're not currently playing and at least 5 seconds have passed
+    if (timeSinceLastCheck >= 5000) {
+        console.log(`Auto-refreshing playlist (${new Date().toLocaleTimeString()})`);
+        lastPlaylistCheck = now;
+        
+        // Call the refresh function with autoplay=false to avoid interrupting current playback
+        refreshPlaylist(false);
+    }
+}, 5000); // Check every 5 seconds
+
+
 </script>
 </body>
 </html>

@@ -27,3 +27,4 @@ music_player_gradio/cache/scan_cache.json
 music_player_gradio/scan_cache.json
 music_player_gradio/.gradio/certificate.pem
 music_player_gradio/static/test.txt
+music_player_gradio/config/openrouter_api_key.json

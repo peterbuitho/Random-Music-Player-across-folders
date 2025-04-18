@@ -2,6 +2,7 @@
 # Ported from tkinter version
 import os
 import random
+import time
 import gradio as gr
 from mutagen import File
 from mutagen.flac import FLAC
@@ -11,13 +12,19 @@ import re
 
 # --- OpenRouter Chat integration ---
 try:
-    from openrouter_utils import save_api_key, load_api_key, parse_genre_request
+    from openrouter_utils import (
+        save_api_key, load_api_key, parse_genre_request, 
+        get_available_models, load_selected_model, save_selected_model,
+        FREE_MODELS
+    )
 except ImportError:
     print("OpenRouter utilities not found. Chat features will be disabled.")
     save_api_key = load_api_key = parse_genre_request = None
+    get_available_models = load_selected_model = save_selected_model = None
+    FREE_MODELS = []
 
 # --- Hybrid API (FastAPI) integration ---
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import mimetypes
@@ -71,46 +78,132 @@ def get_tags(filepath):
 
 LYRICS_API = "https://api.lyrics.ovh/v1/{artist}/{title}"
 def fetch_lyrics(artist, title):
-    try:
-        url = LYRICS_API.format(artist=artist, title=title)
-        resp = requests.get(url)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get('lyrics', '')
-    except Exception:
-        pass
-    return ""
+    max_retries = 2
+    retry_delay = 1  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            url = LYRICS_API.format(artist=artist, title=title)
+            # Add timeout to prevent hanging connections
+            resp = requests.get(url, timeout=10)
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                return data.get('lyrics', '')
+            elif resp.status_code >= 400:
+                # Don't retry for client/server errors
+                break
+                
+        except requests.exceptions.ConnectionError:
+            # Handle connection reset errors
+            if attempt < max_retries - 1:
+                # Wait before retrying
+                time.sleep(retry_delay)
+                continue
+        except requests.exceptions.Timeout:
+            # Handle timeouts
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+                continue
+        except Exception:
+            # Handle any other exceptions
+            break
+    
+    return ""  # Return empty string if all attempts fail
 
 # --- Gradio App Logic ---
 
 AUDIO_EXTS = (".mp3", ".flac")
 
-def pick_songs(n, genres=None, should_autoplay=False):
-    import random
+# Auto-populate playlist on startup if possible
+import threading
+
+def auto_populate_playlist():
     try:
-        n = int(n)
-    except Exception:
-        n = 10
-    if n <= 0:
-        n = 10
-    # If genres are specified, filter playlist accordingly
-    if genres:
-        filtered = [f for f in player.audio_files if any(g in player.tags_cache.get(f, {}).get('genres', []) for g in genres)]
-    else:
-        filtered = player.audio_files.copy()
-    if len(filtered) <= n:
-        player.playlist = filtered.copy()
-        player.current = 0
-        # If autoplay is requested, add API flag
-        if should_autoplay:
-            player.autoplay_next = True
-        return player.get_playlist_table()
-    player.playlist = random.sample(filtered, n)
-    player.current = 0
-    # If autoplay is requested, add API flag
+        if hasattr(player, 'playlist') and hasattr(player, 'audio_files'):
+            if not player.playlist and player.audio_files:
+                n = load_pick_count() if 'load_pick_count' in globals() else 10
+                print(f"[Startup] Auto-populating playlist with {n} songs...")
+                pick_songs(n, genres=None, should_autoplay=False)
+                print(f"[Startup] Playlist populated with {len(player.playlist)} songs.")
+            else:
+                print(f"[Startup] Playlist already exists or no audio files found. Skipping auto-populate.")
+        else:
+            print("[Startup] Player not initialized correctly. Cannot auto-populate playlist.")
+    except Exception as e:
+        print(f"[Startup] Error during auto-populate playlist: {e}")
+
+threading.Timer(0.5, auto_populate_playlist).start()
+
+def pick_songs(n, genres=None, should_autoplay=False):
+    """Pick random songs from the library with optional genre filtering.
+    Optimized version to prevent CPU spikes and browser hanging.
+    """
+    import random
+    
+    # Validate input count
+    try:
+        n = max(1, min(int(n), 100))  # Limit to reasonable range (1-100)
+    except (ValueError, TypeError):
+        n = 10  # Default
+    
+    # Set autoplay flag if requested - do this early in case of any failures
     if should_autoplay:
         player.autoplay_next = True
-    return player.get_playlist_table()
+    
+    # Handle empty library case gracefully
+    if not player.audio_files:
+        player.playlist = []
+        player.current = 0
+        return {
+            "playlist": [],
+            "autoplay": player.autoplay_next,
+            "current": 0
+        }
+    
+    # Filter by genre more efficiently
+    filtered = []
+    
+    # Only filter if we have genres specified
+    if genres and isinstance(genres, (list, tuple)) and len(genres) > 0:
+        # Skip empty genre lists
+        genres = [g for g in genres if g]  # Remove empty entries
+        
+        if genres:  # Still have genres after filtering empty ones
+            # Use a more efficient approach - convert genres to a set for O(1) lookups
+            genre_set = set(genres)
+            
+            # Pre-compute which files match to avoid nested loops
+            for f in player.audio_files:
+                file_genres = player.tags_cache.get(f, {}).get('genres', [])
+                if any(g in genre_set for g in file_genres):
+                    filtered.append(f)
+        else:
+            # No valid genres, use all files
+            filtered = player.audio_files.copy()
+    else:
+        # No genres specified, use all files
+        filtered = player.audio_files.copy()
+    
+    # Use all available if we have fewer songs than requested
+    if len(filtered) <= n:
+        player.playlist = filtered.copy()
+    else:
+        # Take a random sample (more efficient than shuffling the whole list)
+        player.playlist = random.sample(filtered, n)
+    
+    # Reset current position
+    player.current = 0
+    
+    # Return table along with metadata
+    playlist_table = player.get_playlist_table()
+    
+    # Return results with minimal data processing
+    return {
+        "playlist": playlist_table,
+        "autoplay": player.autoplay_next,
+        "current": player.current
+    }
 
 
 class MusicPlayerGradio:
@@ -538,57 +631,387 @@ audio:-webkit-media-controls-play-button {
                 inputs=[genre_dropdown],
                 outputs=[song_count_text]
             )
-            # Connect the Pick songs button
-            def pick_and_inject_script(n, genres):
-                # Call pick_songs with autoplay flag set to True
-                result = pick_songs(n, genres, should_autoplay=True)
-                # Include a script that will run when this function completes
+            # Connect the Pick songs button - simple pre-LLM style
+            def pick_and_update_table(n, genres):
+                # Simple function like before LLM integration
+                if not n:
+                    n = 10
+                try:
+                    n = int(n)
+                except (ValueError, TypeError):
+                    n = 10
+                
+                # Set autoplay flag
+                player.autoplay_next = True
+                
+                # Simple filtering and playlist update
+                if genres:
+                    filtered = [f for f in player.audio_files if any(g in player.tags_cache.get(f, {}).get('genres', []) for g in genres)]
+                else:
+                    filtered = player.audio_files.copy()
+                
+                # Update playlist
+                if len(filtered) <= n:
+                    player.playlist = filtered.copy()
+                else:
+                    import random
+                    player.playlist = random.sample(filtered, n)
+                
+                player.current = 0
+                
+                # Use enhanced direct approach to refresh the player with better parameters
                 js_code = '''
                 <script>
-                // Directly execute the refresh and play
-                (function() {
-                    console.log("Triggering player refresh with autoplay");
-                    setTimeout(function() {
-                        const iframe = document.getElementById('wavesurfer-iframe');
-                        if (iframe && iframe.contentWindow) {
-                            console.log("Sending message to iframe");
-                            iframe.contentWindow.postMessage({type: 'refresh-and-play'}, '*');
-                        } else {
-                            console.log("Iframe not found or contentWindow not available");
-                        }
-                    }, 1500);
-                })();
+                setTimeout(function() {
+                    console.log("Triggering player refresh from manual pick...");
+                    // Direct reload approach with enhanced parameters
+                    var refreshFrame = document.createElement('iframe');
+                    refreshFrame.style.display = 'none';
+                    refreshFrame.src = '/direct-refresh-playlist?autoplay=true&api=gradio&ts=' + Date.now();
+                    document.body.appendChild(refreshFrame);
+                    
+                    // Remove the frame after it's loaded to clean up
+                    refreshFrame.onload = function() {
+                        console.log("Player refresh request completed");
+                        setTimeout(function() {
+                            document.body.removeChild(refreshFrame);
+                        }, 1000);
+                    };
+                }, 300); // Reduced delay for faster response
                 </script>
                 '''
-                return gr.update(value=result), gr.update(value=js_code)
+                
+                # Return new playlist table and refresh script
+                return player.get_playlist_table(), gr.update(value=js_code)
             
             autoplay_script = gr.HTML(visible=True)
             
             pick_songs_btn.click(
-                fn=pick_and_inject_script,
+                fn=pick_and_update_table,
                 inputs=[pick_count, genre_dropdown],
                 outputs=[playlist_table, autoplay_script]
             )
 
+        # Chat interface tab
+        with gr.Tab("Chat"):
+            gr.Markdown("### Chat with AI to control your music player")
+            chat_history = gr.Chatbot(height=400, label="Chat History", type="messages")
+            
+            with gr.Row():
+                chat_input = gr.Textbox(label="Ask the AI to pick songs or filter by genre", placeholder="Example: Play 5 random rock songs", lines=2)
+                chat_submit = gr.Button("Send", variant="primary")
+            
+            with gr.Row():
+                chat_status = gr.Markdown("")
+            
+            def chat_and_pick_songs(message, history):
+                # Check if OpenRouter integration is available
+                if parse_genre_request is None:
+                    return history + [{"role": "assistant", "content": "OpenRouter integration is not available. Please make sure openrouter_utils.py is in the same directory."}], "", None
+                
+                # Check if API key is set
+                api_key = load_api_key()
+                if not api_key:
+                    return history + [{"role": "assistant", "content": "No API key found. Please add your OpenRouter API key in settings."}], "", None
+                
+                # Get available genres
+                available_genres = sorted(list(player.genres)) if player.genres else []
+                if not available_genres:
+                    return history + [{"role": "assistant", "content": "No genres found. Please scan your music folders first."}], "", None
+                
+                # Add request to history
+                new_history = history + [{"role": "assistant", "content": "Thinking..."}]
+                
+                try:
+                    # Parse the request
+                    selected_genres, num_songs, error = parse_genre_request(message, available_genres)
+                    
+                    if error:
+                        new_history[-1]["content"] = f"Error: {error}"
+                        return new_history, "", None
+                    
+                    # Filter by selected genres and pick songs
+                    if selected_genres:
+                        player.filter_by_genre(selected_genres)
+                        genre_text = ", ".join(selected_genres)
+                    else:
+                        player.filter_by_genre([])
+                        genre_text = "all"
+                    
+                    # Pick songs and set autoplay
+                    pick_songs(num_songs, selected_genres, should_autoplay=True)
+                    
+                    # Generate response
+                    response = f"Playing {num_songs} songs from genres: {genre_text}. The music will start momentarily."
+                    new_history[-1]["content"] = response
+                    
+                    # Use enhanced direct approach to refresh the player with better parameters
+                    js_code = '''
+                    <script>
+                    setTimeout(function() {
+                        console.log("Triggering player refresh from LLM request...");
+                        // Direct reload approach with enhanced parameters
+                        var refreshFrame = document.createElement('iframe');
+                        refreshFrame.style.display = 'none';
+                        refreshFrame.src = '/direct-refresh-playlist?autoplay=true&api=llm&ts=' + Date.now();
+                        document.body.appendChild(refreshFrame);
+                        
+                        // Remove the frame after it's loaded to clean up
+                        refreshFrame.onload = function() {
+                            console.log("Player refresh request from LLM completed");
+                            setTimeout(function() {
+                                document.body.removeChild(refreshFrame);
+                            }, 1000);
+                        };
+                    }, 300); // Reduced delay for faster response
+                    </script>
+                    '''
+                    
+                    return new_history, "", gr.update(value=js_code)
+                    
+                except Exception as e:
+                    new_history[-1]["content"] = f"An error occurred: {str(e)}"
+                    return new_history, "", None
+            
+            chat_submit.click(
+                fn=chat_and_pick_songs,
+                inputs=[chat_input, chat_history],
+                outputs=[chat_history, chat_input, autoplay_script]
+            )
+            chat_input.submit(
+                fn=chat_and_pick_songs,
+                inputs=[chat_input, chat_history],
+                outputs=[chat_history, chat_input, autoplay_script]
+            )
+            
+            gr.Markdown("""
+            ### Example phrases:
+            - "Play 5 random jazz songs"  
+            - "I want to listen to some rock and metal music"  
+            - "Create a playlist with 15 classical and ambient songs"  
+            - "Pick some electronic tracks"  
+            """)
+            
         with gr.Tab("Settings"):
             gr.Markdown("### General Settings")
             with gr.Row():
                 pick_count.render()
             pick_count.change(fn=save_pick_count, inputs=[pick_count], outputs=[pick_count])
             gr.Markdown("Set how many random songs to pick when you use the 'Pick songs' button in the Player tab.")
+            
+            # OpenRouter API key settings
+            gr.Markdown("### AI Chat Settings")
+            openrouter_api_key = gr.Textbox(
+                label="OpenRouter API Key", 
+                placeholder="Enter your OpenRouter API key",
+                type="password",
+                value=load_api_key() or ""
+            )
+            
+            save_key_btn = gr.Button("Save API Key")
+            key_status = gr.Markdown("")
+            
+            # Model selection
+            gr.Markdown("#### Select LLM Model")
+            gr.Markdown("Choose which AI model to use for chat. OpenRouter provides various models, including free options.")
+            
+            # Function to fetch and format models from OpenRouter
+            def fetch_models(free_only=False):
+                available_models = get_available_models(include_free_only=free_only) if get_available_models else FREE_MODELS
+                
+                # Format for dropdown
+                model_choices = []
+                model_desc_dict = {}
+                pricing_info = {}
+                
+                for model in available_models:
+                    model_id = model["id"]
+                    name = model.get("name", model_id)
+                    desc = model.get("description", "")
+                    latency = model.get("latency", 999)
+                    
+                    # Add speed indicators to model names based on latency
+                    speed_indicator = ""
+                    if latency < 1.5:
+                        speed_indicator = "⚡ "  # Fast
+                    elif latency < 2.5:
+                        speed_indicator = "✓ "   # Medium
+                    elif latency < 3.5:
+                        speed_indicator = "🕒 "  # Slower
+                    else:
+                        speed_indicator = "⏱️ "  # Very slow
+                    
+                    display_name = f"{speed_indicator}{name}"  # Add speed indicator to displayed name
+                    
+                    # Format pricing information if available
+                    price_info = ""
+                    pricing = model.get("pricing", {})
+                    if pricing:
+                        input_price = pricing.get("prompt", 0)
+                        output_price = pricing.get("completion", 0)
+                        if input_price or output_price:
+                            price_info = f"Pricing: ${input_price}/1M tokens (input), ${output_price}/1M tokens (output)"
+                    
+                    # Add latency info to the description
+                    latency_info = ""
+                    if latency < 999:  # If we have a valid latency estimate
+                        # Convert numeric latency to human-readable description
+                        if latency < 1.5:
+                            speed = "Very fast response time"
+                        elif latency < 2.5:
+                            speed = "Medium response time"
+                        elif latency < 3.5:
+                            speed = "Slower response time"
+                        else:
+                            speed = "Slow response time"
+                        latency_info = f"**Speed**: {speed}"  # Bold for emphasis
+                    
+                    model_choices.append((display_name, model_id))
+                    model_desc_dict[model_id] = desc
+                    pricing_info[model_id] = price_info + ("\n\n" + latency_info if latency_info else "")
+                
+                return model_choices, model_desc_dict, pricing_info
+            
+            # Get current model from config
+            current_model = load_selected_model() if load_selected_model else DEFAULT_MODEL
+            print(f"Loading model selection UI with model: {current_model}")
+            
+            # Get initial models
+            initial_free_only = False  # Start with all models
+            model_choices, model_descs, pricing_info = fetch_models(initial_free_only)
+            
+            # Make sure the current model is in the list - if not, add it
+            found_in_list = False
+            for _, model_id in model_choices:
+                if model_id == current_model:
+                    found_in_list = True
+                    break
+            
+            # If current model isn't in the list (e.g., it's a premium model but we're showing free only),
+            # add it to the choices to ensure it's selectable
+            if not found_in_list and current_model:
+                # Add the current model to the beginning of the list
+                model_choices.insert(0, (f"Current: {current_model}", current_model))
+                if current_model not in model_descs:
+                    model_descs[current_model] = "Your currently selected model"
+            
+            # Default to the saved model or first available
+            default_model_idx = 0
+            if current_model and model_choices:
+                for i, (name, model_id) in enumerate(model_choices):
+                    if model_id == current_model:
+                        default_model_idx = i
+                        break
+                print(f"Setting dropdown to index {default_model_idx} for model {current_model}")
+            
+            # Free models toggle
+            with gr.Row():
+                free_only_checkbox = gr.Checkbox(
+                    label="Show only free/included models", 
+                    value=initial_free_only,
+                    info="Filters models to show only those marked as free or included in the API"
+                )
+                refresh_models_btn = gr.Button("Refresh Models")
+            
+            # Models dropdown
+            with gr.Row():
+                model_dropdown = gr.Dropdown(
+                    choices=model_choices,
+                    value=model_choices[default_model_idx][1] if model_choices and len(model_choices) > default_model_idx else None,
+                    label="AI Model",
+                    interactive=True
+                )
+            
+            # Model description
+            model_description = gr.Markdown(
+                model_descs.get(current_model, "") + 
+                ("\n\n" + pricing_info.get(current_model, "") if current_model in pricing_info and pricing_info[current_model] else "")
+            )
+            
+            # Function to refresh model list
+            def refresh_model_list(free_only):
+                model_choices, model_descs, pricing_info = fetch_models(free_only)
+                return gr.Dropdown(choices=model_choices), ""
+            
+            # Function to update model description
+            def update_model_description(model_id):
+                desc = model_descs.get(model_id, "")
+                pricing = pricing_info.get(model_id, "")
+                if pricing:
+                    desc = desc + "\n\n" + pricing
+                return desc
+            
+            def save_model_and_show_status(model_id):
+                if not model_id:
+                    return "Please select a model"
+                
+                try:
+                    save_selected_model(model_id)
+                    return f"✅ Model set to {model_id}"
+                except Exception as e:
+                    return f"Error saving model choice: {str(e)}"
+            
+            # Connect model dropdown to description
+            model_dropdown.change(
+                fn=update_model_description,
+                inputs=[model_dropdown],
+                outputs=[model_description]
+            )
+            
+            # Connect free model toggle and refresh button
+            free_only_checkbox.change(
+                fn=refresh_model_list,
+                inputs=[free_only_checkbox],
+                outputs=[model_dropdown, model_description]
+            )
+            
+            refresh_models_btn.click(
+                fn=refresh_model_list,
+                inputs=[free_only_checkbox],
+                outputs=[model_dropdown, model_description]
+            )
+            
+            # Save model button
+            save_model_btn = gr.Button("Save Model Preference")
+            model_status = gr.Markdown("")
+            
+            save_model_btn.click(
+                fn=save_model_and_show_status,
+                inputs=[model_dropdown],
+                outputs=[model_status]
+            )
+            
+            def save_key_and_show_status(api_key):
+                if not api_key or len(api_key.strip()) < 10:
+                    return "Error: Invalid API key"
+                    
+                try:
+                    save_api_key(api_key.strip())
+                    return "✅ API key saved successfully"
+                except Exception as e:
+                    return f"Error saving API key: {str(e)}"
+            
+            save_key_btn.click(
+                fn=save_key_and_show_status,
+                inputs=[openrouter_api_key],
+                outputs=[key_status]
+            )
             # --- Theme selector UI ---
             def set_theme(new_theme):
                 save_theme(new_theme)
                 return f"Theme set to {new_theme}. Please reload the app to apply."
             theme_dropdown = gr.Dropdown(["Default", "Soft", "Monochrome"], value=_selected_theme, label="Gradio Theme", interactive=True)
             theme_status = gr.Markdown(visible=False)
-            def _show_theme_status(theme):
-                return gr.update(visible=True)
-            def _show_theme_status_message(theme):
-                return f"Theme set to {theme}. Please reload the app to apply."
-            theme_dropdown.change(fn=set_theme, inputs=[theme_dropdown], outputs=[theme_status])
-            theme_dropdown.change(fn=_show_theme_status, inputs=[theme_dropdown], outputs=[theme_status])
-            theme_dropdown.change(fn=_show_theme_status_message, inputs=[theme_dropdown], outputs=[theme_status])
+            
+            # Combine theme handlers into a single function
+            def handle_theme_change(theme):
+                # Set the theme
+                save_theme(theme)
+                # Show and update the status message
+                return gr.update(value=f"Theme set to {theme}. Please reload the app to apply.", visible=True)
+            
+            # Connect the single handler
+            theme_dropdown.change(fn=handle_theme_change, inputs=[theme_dropdown], outputs=[theme_status])
             # --- Restart server button ---
             import sys
             def restart_server():
@@ -656,7 +1079,65 @@ def get_cover_path(filepath):
 
 # API: /playlist - returns all songs with metadata, lyrics, and cover art URL
 @app.get("/playlist")
-def playlist_api():
+async def playlist_api(request: Request):
+    # Import modules needed within this function
+    import time
+    import random
+    # Check query parameters for any refresh indicators
+    params = request.query_params
+    force_refresh = params.get('nocache') or params.get('force_refresh') or params.get('ts')
+    # Only generate a new playlist if explicitly requested with 'new_playlist'
+    generate_new = params.get('new_playlist') == '1' or params.get('new_playlist') == 'true'
+    
+    # Only generate a new playlist if explicitly requested
+    if generate_new:
+        print(f"Server received forced playlist refresh with parameter: {force_refresh}")
+        
+        # Generate truly fresh random playlist
+        import random
+        import time
+        
+        # Use a different seed each time
+        random_seed = int(time.time() * 1000000) + random.randint(1, 1000000)
+        random.seed(random_seed)
+        print(f"Using random seed: {random_seed}")
+        
+        # Get all audio files and randomly select some
+        all_files = player.audio_files.copy()
+        if all_files:
+            random.shuffle(all_files)
+            n = min(len(all_files), 10)  # Default to 10 songs
+            
+            # Get current playlist titles for comparison
+            current_titles = []
+            if player.playlist:
+                for f in player.playlist[:3]:
+                    tags = player.tags_cache.get(f, {}) 
+                    current_titles.append(tags.get('title', os.path.basename(f)))
+            
+            # Generate new playlist
+            new_playlist = all_files[:n]
+            
+            # Check if first song is the same, if so, shift the playlist
+            if player.playlist and new_playlist and player.playlist[0] == new_playlist[0]:
+                print("First song is the same - shifting playlist")
+                if len(new_playlist) > 1:
+                    new_playlist = new_playlist[1:] + [new_playlist[0]]
+            
+            # Update player's playlist
+            player.playlist = new_playlist
+            player.current = 0
+            player.autoplay_next = True
+            
+            # Log what we've picked
+            new_titles = []
+            for f in player.playlist[:3]:
+                tags = player.tags_cache.get(f, {})
+                new_titles.append(tags.get('title', os.path.basename(f)))
+            
+            print(f"Previous first songs: {current_titles}")
+            print(f"New first songs: {new_titles}")
+    
     # Create playlist data
     playlist = []
     for idx, f in enumerate(player.playlist):
@@ -676,20 +1157,41 @@ def playlist_api():
             "artist": artist,
             "album": album,
             "genres": genres,
-            "audio_url": f"/audio/{idx}",
+            "audio_url": f"/audio/{idx}?cache={int(time.time() * 1000 + random.randint(1, 10000))}",
             "lyrics_url": f"/lyrics/{idx}",
             "cover_url": cover_url
         })
     
-    # Check if we need to autoplay and reset the flag
+    # Check if we need to autoplay and reset the flag ONLY when it's consumed
+    # This ensures the autoplay flag persists until the client actually uses it
     autoplay = player.autoplay_next
-    player.autoplay_next = False  # Reset the flag
+    
+    # Add the current index to help the player know which song to play
+    current_idx = player.current
+    
+    # Get the autoplay state and create a unique signature for this playlist
+    # This helps the frontend track if this is a genuinely new playlist or just a refresh
+    playlist_signature = "-".join(str(item["title"]) for item in playlist[:5])
+    
+    # Only reset the autoplay flag if we're actually sending it as true
+    # This way if the frontend fails to get the signal, we'll keep trying
+    if autoplay:
+        # Log that we're sending an autoplay command
+        print(f"Sending autoplay command to frontend for playlist: {playlist_signature[:30]}...")
     
     # Return playlist with additional metadata
-    return JSONResponse({
+    response = {
         "playlist": playlist,
-        "autoplay": autoplay
-    })
+        "autoplay": autoplay,
+        "current": current_idx,
+        "signature": playlist_signature
+    }
+    
+    # Only reset the autoplay flag AFTER creating the response
+    if autoplay:
+        player.autoplay_next = False  # Reset the flag after sending it
+    
+    return JSONResponse(response)
 
 # API: /audio/{idx} - serves audio file by playlist index
 @app.get("/audio/{idx}")
@@ -698,9 +1200,34 @@ def audio_file(idx: int):
         f = player.playlist[idx]
         ext = os.path.splitext(f)[1].lower()
         mime = mimetypes.types_map.get(ext, "audio/mpeg")
-        return FileResponse(f, media_type=mime, filename=os.path.basename(f))
-    except Exception:
+        
+        # Custom response handling to suppress connection reset errors
+        try:
+            # Create response with anti-caching headers
+            response = FileResponse(f, media_type=mime, filename=os.path.basename(f))
+            # Add cache control headers to prevent caching
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            # Add a timestamp to make each response unique
+            response.headers["X-Timestamp"] = str(time.time())
+            return response
+        except ConnectionResetError:
+            # Client disconnected, just return a normal response
+            # This prevents the error from showing in the logs
+            return Response(status_code=200)
+        except Exception as e:
+            # Log other errors but don't show stack trace
+            print(f"Error serving audio file: {str(e)}")
+            return Response(status_code=500)
+            
+    except IndexError:
+        # Playlist index out of range
         return Response(status_code=404)
+    except Exception as e:
+        # Any other exception
+        print(f"Unexpected error in audio_file: {str(e)}")
+        return Response(status_code=500)
 
 # API: /lyrics/{idx} - returns lyrics for song (try cache, else fetch)
 @app.get("/lyrics/{idx}")
@@ -758,7 +1285,7 @@ async def pick_songs_api(request: Request):
             "artist": artist,
             "album": album,
             "genres": genres,
-            "audio_url": f"/audio/{idx}",
+            "audio_url": f"/audio/{idx}?cache={int(time.time() * 1000 + random.randint(1, 10000))}",
             "lyrics_url": f"/lyrics/{idx}",
             "cover_url": cover_url
         })
@@ -879,38 +1406,188 @@ def create_web_interface():
                     inputs=[genre_dropdown],
                     outputs=[song_count_text]
                 )
-                # Connect the Pick songs button
-                def pick_and_inject_script_web(n, genres):
-                    # Call pick_songs with autoplay flag set to True
-                    result = pick_songs(n, genres, should_autoplay=True)
-                    # Include a script that will run when this function completes
-                    js_code = '''
+                # Connect the Pick songs button - simple pre-LLM style
+                def pick_and_update_table_web(n, genres):
+                    # Simple function like before LLM integration
+                    if not n:
+                        n = 10
+                    try:
+                        n = int(n)
+                    except (ValueError, TypeError):
+                        n = 10
+                    
+                    # Set autoplay flag
+                    player.autoplay_next = True
+                    
+                    # Ensure we're using completely randomized selection with unique songs
+                    import random
+                    import time
+                    import os
+                    
+                    # Generate a truly unique seed based on multiple factors
+                    random_seed = int(time.time() * 1000) + os.getpid() + random.randint(1, 1000000)
+                    random.seed(random_seed)
+                    print(f"Using random seed: {random_seed}")
+                    
+                    # Get all available audio files
+                    all_files = player.audio_files.copy()
+                    
+                    # Apply genre filtering if needed
+                    if genres:
+                        filtered = [f for f in all_files if any(g in player.tags_cache.get(f, {}).get('genres', []) for g in genres)]
+                    else:
+                        filtered = all_files
+                    
+                    # Make sure we have enough songs
+                    if not filtered:
+                        print("No songs match the selected genres")
+                        return player.get_playlist_table(), ""
+                    
+                    # Create a truly random order by sorting with a random key
+                    filtered.sort(key=lambda _: random.random())
+                    
+                    # Take the requested number of songs
+                    if len(filtered) <= n:
+                        selected_songs = filtered.copy()
+                    else: 
+                        selected_songs = filtered[:n]
+                    
+                    # Double-check we're not accidentally picking the same songs
+                    current_titles = [player.tags_cache.get(song, {}).get('title', 'Unknown') for song in player.playlist]
+                    new_titles = [player.tags_cache.get(song, {}).get('title', 'Unknown') for song in selected_songs]
+                    
+                    print(f"Current playlist: {current_titles[:3]}")
+                    print(f"New playlist: {new_titles[:3]}")
+                    
+                    if current_titles and new_titles and current_titles[0] == new_titles[0]:
+                        print("WARNING: First song is the same as before! Reshuffling...")
+                        # Try again with a different random order
+                        random.seed(random_seed + 1)
+                        filtered.sort(key=lambda _: random.random())
+                        selected_songs = filtered[:n] if len(filtered) > n else filtered.copy()
+                    
+                    # Update the player's playlist
+                    player.playlist = selected_songs
+                    player.current = 0
+                    
+                    # Print to server log to verify we're getting different songs
+                    print(f"Selected {len(player.playlist)} random songs:")
+                    for i, song in enumerate(player.playlist[:3]):
+                        title = player.tags_cache.get(song, {}).get('title', 'Unknown')
+                        print(f"  {i+1}. {title}")
+                    
+                    # Use a unique timestamp to ensure the browser doesn't cache the response
+                    import time
+                    timestamp = str(time.time())
+                    
+                    # Add script with unique timestamp to force a complete refresh
+                    # Include the new_playlist parameter to force generation of a new playlist
+                    js_code = f'''
                     <script>
-                    // Directly execute the refresh and play
-                    (function() {
-                        console.log("Triggering player refresh with autoplay");
-                        setTimeout(function() {
-                            const iframe = document.getElementById('wavesurfer-iframe');
-                            if (iframe && iframe.contentWindow) {
-                                console.log("Sending message to iframe");
-                                iframe.contentWindow.postMessage({type: 'refresh-and-play'}, '*');
-                            } else {
-                                console.log("Iframe not found or contentWindow not available");
-                            }
-                        }, 1500);
-                    })();
+                    // Force a complete refresh with unique ID: {timestamp}
+                    setTimeout(function() {{
+                        // First clear any cached playlist data
+                        localStorage.removeItem('wavesurfer_playlist');
+                        
+                        const iframe = document.getElementById('wavesurfer-iframe');
+                        if (iframe && iframe.contentWindow) {{
+                            // Tell the player we want a new playlist with this refresh
+                            iframe.contentWindow.postMessage({{type: 'refresh-and-play', timestamp: '{timestamp}', newPlaylist: true}}, '*');
+                            console.log('Sending refresh command with timestamp', '{timestamp}');
+                        }}
+                    }}, 500);
                     </script>
                     '''
-                    return gr.update(value=result), gr.update(value=js_code)
+                    
+                    # Return new playlist table and refresh script
+                    return player.get_playlist_table(), gr.update(value=js_code)
                 
                 autoplay_script_web = gr.HTML(visible=True)
                 
                 pick_songs_btn.click(
-                    fn=pick_and_inject_script_web,
+                    fn=pick_and_update_table_web,
                     inputs=[pick_count_web, genre_dropdown],
                     outputs=[playlist_table, autoplay_script_web]
                 )
 
+            # Chat interface tab for web
+            with gr.Tab("Chat"):
+                gr.Markdown("### Chat with AI to control your music player")
+                chat_history_web = gr.Chatbot(height=400, label="Chat History", type="messages")
+                
+                with gr.Row():
+                    chat_input_web = gr.Textbox(label="Ask the AI to pick songs or filter by genre", placeholder="Example: Play 5 random rock songs", lines=2)
+                    chat_submit_web = gr.Button("Send", variant="primary")
+                
+                with gr.Row():
+                    chat_status_web = gr.Markdown("")
+                
+                def chat_and_pick_songs_web(message, history):
+                    # Check if OpenRouter integration is available
+                    if parse_genre_request is None:
+                        return history + [{"role": "assistant", "content": "OpenRouter integration is not available. Please make sure openrouter_utils.py is in the same directory."}], ""
+                    
+                    # Check if API key is set
+                    api_key = load_api_key()
+                    if not api_key:
+                        return history + [{"role": "assistant", "content": "No API key found. Please contact the administrator to set up the OpenRouter API key."}], ""
+                    
+                    # Get available genres
+                    available_genres = sorted(list(player.genres)) if player.genres else []
+                    if not available_genres:
+                        return history + [{"role": "assistant", "content": "No genres found. Please scan your music folders first."}], ""
+                    
+                    # Add request to history
+                    new_history = history + [{"role": "assistant", "content": "Thinking..."}]
+                    
+                    try:
+                        # Parse the request
+                        selected_genres, num_songs, error = parse_genre_request(message, available_genres)
+                        
+                        if error:
+                            new_history[-1]["content"] = f"Error: {error}"
+                            return new_history, ""
+                        
+                        # Filter by selected genres and pick songs
+                        if selected_genres:
+                            player.filter_by_genre(selected_genres)
+                            genre_text = ", ".join(selected_genres)
+                        else:
+                            player.filter_by_genre([])
+                            genre_text = "all"
+                        
+                        # Pick songs and set autoplay
+                        pick_songs(num_songs, selected_genres, should_autoplay=True)
+                        
+                        # Generate response
+                        response = f"Playing {num_songs} songs from genres: {genre_text}. The music will start momentarily."
+                        new_history[-1]["content"] = response
+                        
+                        return new_history, ""
+                        
+                    except Exception as e:
+                        new_history[-1]["content"] = f"An error occurred: {str(e)}"
+                        return new_history, ""
+                
+                chat_submit_web.click(
+                    fn=chat_and_pick_songs_web,
+                    inputs=[chat_input_web, chat_history_web],
+                    outputs=[chat_history_web, chat_input_web]
+                )
+                chat_input_web.submit(
+                    fn=chat_and_pick_songs_web,
+                    inputs=[chat_input_web, chat_history_web],
+                    outputs=[chat_history_web, chat_input_web]
+                )
+                
+                gr.Markdown("""
+                ### Example phrases:
+                - "Play 5 random jazz songs"  
+                - "I want to listen to some rock and metal music"  
+                - "Create a playlist with 15 classical and ambient songs"  
+                - "Pick some electronic tracks"  
+                """)
+            
             # Simplified Settings tab with just the pick count parameter
             with gr.Tab("Settings"):
                 gr.Markdown("### General Settings")
@@ -927,9 +1604,45 @@ app = gr.mount_gradio_app(app, web_interface, path="/web")
 
 # --- End Hybrid API endpoints ---
 
+# Create an endpoint for direct playlist refresh without needing iframe messaging
+@app.get("/direct-refresh-playlist")
+async def direct_refresh_playlist(autoplay: bool = True, api: str = "web"):
+    """Endpoint that directly refreshes the player by redirecting to the player page
+    
+    Parameters:
+        autoplay: Whether to start playing after refresh (default: True)
+        api: Which API is calling this (web or gradio)
+    """
+    # Set the autoplay flag in the player's data cache to ensure it starts playing
+    # This ensures both APIs can trigger autoplay
+    if hasattr(player, 'autoplay_next'):
+        player.autoplay_next = autoplay
+    
+    # Log the refresh request
+    print(f"Direct refresh requested: autoplay={autoplay}, api={api}, time={int(time.time())}")
+    
+    # Create a simple HTML response that will redirect to the player
+    # and force a reload of the playlist with autoplay
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta http-equiv="refresh" content="0;url=/static/player.html?refresh=1&autoplay=1&ts={int(time.time())}&source={api}" />
+    </head>
+    <body>
+        <p>Refreshing player...</p>
+        <script>
+            console.log("Redirecting to player with autoplay...");
+        </script>
+    </body>
+    </html>
+    """
+    return Response(content=html_content, media_type="text/html")
+
 # Inject favicon using custom HTML
 favicon_html = """
-<link rel=\"icon\" type=\"image/x-icon\" href=\"favicon.ico\">\n"""
+<link rel="icon" type="image/x-icon" href="favicon.ico">
+"""
 gr.HTML(favicon_html)
 
 # Run with: uvicorn music_player_gradio:app --host 0.0.0.0 --port 7860
