@@ -9,6 +9,13 @@ from mutagen.mp3 import MP3
 import requests
 import re
 
+# --- OpenRouter Chat integration ---
+try:
+    from openrouter_utils import save_api_key, load_api_key, parse_genre_request
+except ImportError:
+    print("OpenRouter utilities not found. Chat features will be disabled.")
+    save_api_key = load_api_key = parse_genre_request = None
+
 # --- Hybrid API (FastAPI) integration ---
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse, Response
