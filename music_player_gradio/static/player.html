@@ -125,6 +125,8 @@
         .lyrics {
             border-radius: 8px; padding: 1em; margin-bottom: 1em;
             max-height: 180px; overflow-y: auto; font-size: 1em;
+            white-space: pre-line;
+            word-wrap: break-word;
         }
         html, body {
             min-height: 0;
@@ -257,6 +259,7 @@
             .lyrics {
                 background: #232336; border: 1px solid #39395a; color: #fff;
                 white-space: pre-line;
+                word-wrap: break-word;
             }
             .playlist {
                 background: #232336; border: 1px solid #39395a;
@@ -289,9 +292,9 @@
     </script>
 </head>
 <body>
-<div style="text-align:center;font-size:0.98em;color:#7ff;">Playlist auto-refreshes every 5 seconds after picking new songs in Music Library.<br>Or click <b>Refresh Playlist</b> below to update instantly.</div>
+<div style="text-align:center;font-size:0.98em;color:rgb(79, 70, 229);">Playlist auto-refreshes every 5 seconds after picking new songs in Music Library.<br>Or click <b>Refresh Playlist</b> below to update instantly.</div>
 <div class="player-container">
-    <button id="refresh" style="margin-bottom:1em;background:#0af;color:#fff;padding:0.5em 1.2em;border:none;border-radius:5px;font-size:1em;cursor:pointer;">🔄 Refresh Playlist</button>
+    <button id="refresh" style="margin-bottom:1em;background:rgb(79, 70, 229);color:#fff;padding:0.5em 1.2em;border:none;border-radius:5px;font-size:1em;cursor:pointer;">⭯ Refresh Playlist</button>
     <div class="info">
         <img class="cover" id="cover" src="" alt="Cover" />
         <div class="meta">
@@ -302,9 +305,9 @@
     </div>
     <div id="waveform" class="waveform"></div>
     <div class="controls">
-        <button id="prev">⏮️</button>
-        <button id="play">▶️</button>
-        <button id="next">⏭️</button>
+        <button id="prev">⮜</button>
+        <button id="play">▷</button>
+        <button id="next">⮞</button>
         <button id="shuffle">🔀</button>
         <input id="volume" type="range" min="0" max="1" step="0.01" value="0.8" title="Volume" />
         <span id="current-time">0:00</span> / <span id="duration">0:00</span>
@@ -339,7 +342,12 @@ function updateLyrics(idx) {
     fetch(API_BASE + playlist[idx].lyrics_url)
         .then(r => r.json())
         .then(data => {
-            lyricsDiv.textContent = data.lyrics ? data.lyrics : 'No lyrics found.';
+            const raw = data.lyrics || '';
+            // unify CRLF/CR to LF
+            const normalized = raw.replace(/\r\n?/g, '\n');
+            // collapse multiple blank lines to single
+            const text = normalized.replace(/\n{2,}/g, '\n');
+            lyricsDiv.textContent = text || 'No lyrics found.';
         }).catch(() => lyricsDiv.textContent = 'No lyrics found.');
 }
 
