@@ -285,6 +285,10 @@
         if (event.data && event.data.type === 'set-theme') {
             setTheme(event.data.theme);
         }
+        else if (event.data && event.data.type === 'refresh-and-play') {
+            // Refresh playlist and auto-play
+            reloadPlaylist(false, true);
+        }
     });
     // Default: set theme based on system
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -479,31 +483,39 @@ function playlistSignature(pl) {
     return pl.map(s => (s.title||'')+':' + (s.artist||'')).join('|');
 }
 
-function reloadPlaylist(keepCurrent) {
+function reloadPlaylist(keepCurrent, forceAutoplay = false) {
     fetch(API_BASE + '/playlist')
         .then(r => r.json())
         .then(data => {
-            const sig = playlistSignature(data);
+            // Handle the new API response format
+            let playlistData = Array.isArray(data) ? data : data.playlist;
+            // Check for autoplay flag in the API response or use the forceAutoplay parameter
+            let shouldAutoplay = (data.autoplay === true) || forceAutoplay;
+            
+            // Log for debugging
+            console.log('Playlist loaded, autoplay:', shouldAutoplay);
+            
+            const sig = playlistSignature(playlistData);
             if (sig !== lastPlaylistSignature) {
-                playlist = data;
+                playlist = playlistData;
                 lastPlaylistSignature = sig;
                 let idx = keepCurrent ? currentIdx : 0;
                 if (idx >= playlist.length) idx = 0;
-                loadSong(idx, false);
+                loadSong(idx, shouldAutoplay);
                 updatePlaylistUI();
             }
         });
 }
 
 document.getElementById('refresh').onclick = function() {
-    reloadPlaylist(false);
+    reloadPlaylist(false, true); // Auto-play when manually refreshing
 };
 
 // Initial load
-reloadPlaylist(false);
+reloadPlaylist(false, false); // Don't auto-play on initial load
 
 // Auto-refresh every 5 seconds
-setInterval(() => reloadPlaylist(true), AUTO_REFRESH_INTERVAL);
+setInterval(() => reloadPlaylist(true, false), AUTO_REFRESH_INTERVAL); // Don't auto-play on background refresh
 </script>
 </body>
 </html>

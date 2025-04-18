@@ -78,7 +78,7 @@ def fetch_lyrics(artist, title):
 
 AUDIO_EXTS = (".mp3", ".flac")
 
-def pick_songs(n, genres=None):
+def pick_songs(n, genres=None, should_autoplay=False):
     import random
     try:
         n = int(n)
@@ -94,9 +94,15 @@ def pick_songs(n, genres=None):
     if len(filtered) <= n:
         player.playlist = filtered.copy()
         player.current = 0
+        # If autoplay is requested, add API flag
+        if should_autoplay:
+            player.autoplay_next = True
         return player.get_playlist_table()
     player.playlist = random.sample(filtered, n)
     player.current = 0
+    # If autoplay is requested, add API flag
+    if should_autoplay:
+        player.autoplay_next = True
     return player.get_playlist_table()
 
 
@@ -110,6 +116,7 @@ class MusicPlayerGradio:
         self.genre_filter = set()
         self.tags_cache = {}
         self.scanning = False
+        self.autoplay_next = False  # Flag to indicate if next playlist load should autoplay
 
     def scan_files(self, folders):
         self.folders = folders
@@ -484,10 +491,13 @@ audio:-webkit-media-controls-play-button {
                 clear_cache_btn = gr.Button("Clear Cache", elem_classes="small-btn")
             status_text = gr.Textbox(label="Status", interactive=False, value="", visible=True)
 
-            genre_choices = sorted(list(player.genres)) if getattr(player, 'genres', None) else []
-            genre_dropdown = gr.CheckboxGroup(choices=genre_choices, label="Filter by Genre", interactive=True)
-            with gr.Row():
+            # Collapsible genre filter section
+            with gr.Accordion("📋 Genre Filters (click to expand)", open=False):
+                genre_choices = sorted(list(player.genres)) if getattr(player, 'genres', None) else []
+                genre_dropdown = gr.CheckboxGroup(choices=genre_choices, label="Filter by Genre", interactive=True)
                 update_genre_btn = gr.Button("Apply Genre Filter", elem_classes="small-btn")
+            
+            with gr.Row():
                 pick_songs_btn = gr.Button("Pick songs", elem_classes="small-btn")
 
             # Set initial song count if scan data is restored
@@ -521,10 +531,36 @@ audio:-webkit-media-controls-play-button {
                 inputs=[genre_dropdown],
                 outputs=[song_count_text]
             )
+            # Connect the Pick songs button
+            def pick_and_inject_script(n, genres):
+                # Call pick_songs with autoplay flag set to True
+                result = pick_songs(n, genres, should_autoplay=True)
+                # Include a script that will run when this function completes
+                js_code = '''
+                <script>
+                // Directly execute the refresh and play
+                (function() {
+                    console.log("Triggering player refresh with autoplay");
+                    setTimeout(function() {
+                        const iframe = document.getElementById('wavesurfer-iframe');
+                        if (iframe && iframe.contentWindow) {
+                            console.log("Sending message to iframe");
+                            iframe.contentWindow.postMessage({type: 'refresh-and-play'}, '*');
+                        } else {
+                            console.log("Iframe not found or contentWindow not available");
+                        }
+                    }, 1500);
+                })();
+                </script>
+                '''
+                return gr.update(value=result), gr.update(value=js_code)
+            
+            autoplay_script = gr.HTML(visible=True)
+            
             pick_songs_btn.click(
-                fn=lambda n, genres: pick_songs(n, genres),
+                fn=pick_and_inject_script,
                 inputs=[pick_count, genre_dropdown],
-                outputs=[playlist_table]
+                outputs=[playlist_table, autoplay_script]
             )
 
         with gr.Tab("Settings"):
@@ -614,6 +650,7 @@ def get_cover_path(filepath):
 # API: /playlist - returns all songs with metadata, lyrics, and cover art URL
 @app.get("/playlist")
 def playlist_api():
+    # Create playlist data
     playlist = []
     for idx, f in enumerate(player.playlist):
         tags = player.tags_cache.get(f) or get_tags(f)
@@ -636,7 +673,16 @@ def playlist_api():
             "lyrics_url": f"/lyrics/{idx}",
             "cover_url": cover_url
         })
-    return JSONResponse(playlist)
+    
+    # Check if we need to autoplay and reset the flag
+    autoplay = player.autoplay_next
+    player.autoplay_next = False  # Reset the flag
+    
+    # Return playlist with additional metadata
+    return JSONResponse({
+        "playlist": playlist,
+        "autoplay": autoplay
+    })
 
 # API: /audio/{idx} - serves audio file by playlist index
 @app.get("/audio/{idx}")
@@ -713,6 +759,164 @@ async def pick_songs_api(request: Request):
 
 # Mount Gradio UI at /gradio
 app = gr.mount_gradio_app(app, demo, path="/gradio")
+
+# --- Create a safer web version without admin controls ---
+def create_web_interface():
+    web_interface = gr.Blocks(theme=THEME_MAP.get(_selected_theme, gr.themes.Soft()), css="""
+    /* Make the play button green and pause button red in the audio player */
+    audio::-webkit-media-controls-play-button {
+        background-color: #27ae60 !important; /* green */
+        border-radius: 50%;
+    }
+    audio:paused::-webkit-media-controls-play-button {
+        background-color: #e74c3c !important; /* red when paused */
+    }
+    audio:-webkit-media-controls-play-button {
+        color: white !important;
+    }
+
+    /* Compact action buttons */
+    .small-btn button {
+        min-width: 70px !important;
+        max-width: 100px !important;
+        width: auto !important;
+        padding: 0.1em 0.7em !important;
+        font-size: 0.9em !important;
+    }
+    """)
+    
+    with web_interface:
+        gr.Markdown("# Random Music Player Web")
+        with gr.Tabs():
+            # --- New WaveSurfer Player tab ---
+            with gr.Tab("Player"):
+                # Embed the custom player as an iframe for full JS/CSS isolation
+                gr.HTML('<iframe id="wavesurfer-iframe" src="/static/player.html" style="width:100%;height:auto;min-height:1200px;max-height:95vh;border:none;max-width:100%;margin:auto;display:block;"></iframe>')
+                gr.HTML('''<script>
+    (function() {
+        function sendThemeToIframe() {
+            var theme = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+            var iframe = document.getElementById('wavesurfer-iframe');
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.postMessage({type: 'set-theme', theme: theme}, '*');
+            }
+        }
+        // Send on load
+        window.addEventListener('DOMContentLoaded', sendThemeToIframe);
+        // Send on theme change (Gradio toggles .dark on <html>)
+        const observer = new MutationObserver(sendThemeToIframe);
+        observer.observe(document.documentElement, {attributes: true, attributeFilter: ['class']});
+        // Also send after a short delay in case iframe loads late
+        setTimeout(sendThemeToIframe, 1000);
+    })();
+    </script>''')
+
+            # --- Renamed tab with limited controls ---
+            with gr.Tab("Create playlist"):
+                gr.Markdown(r"""
+    **Tip:** You can enter multiple music folder paths, separated by commas or semicolons.<br>
+    **Example:**
+    ```
+    \\BuiDS\musik\24bit_flac; \\BuiDS\musik\16bit
+    ```
+    (You can use either forward or backslashes for paths.)
+    """)
+                # Load folder input value and scan data from cache if available
+                _folder_input_value = None
+                try:
+                    _cache = load_scan_cache()
+                    if _cache and _cache.get("folder_input_value"):
+                        _folder_input_value = _cache["folder_input_value"]
+                except Exception:
+                    _folder_input_value = None
+                folder_input = gr.Textbox(
+                    label="Music Folder Paths",
+                    placeholder=r"e.g. D:/Music1, D:/Music2; \\BuiDS\musik",
+                    value=_folder_input_value or ""
+                )
+                
+                with gr.Row():
+                    scan_btn = gr.Button("Scan Folders", elem_classes="small-btn")
+                    refresh_btn = gr.Button("Refresh Playlist / Genres", elem_classes="small-btn")
+                # No clear cache button in this interface
+                status_text = gr.Textbox(label="Status", interactive=False, value="", visible=True)
+
+                # Create local pick count for the web interface
+                pick_count_web = gr.Number(value=load_pick_count(), label="Number of Songs to Pick", precision=0)
+                
+                # Collapsible genre filter section
+                with gr.Accordion("📋 Genre Filters (click to expand)", open=False):
+                    genre_choices = sorted(list(player.genres)) if getattr(player, 'genres', None) else []
+                    genre_dropdown = gr.CheckboxGroup(choices=genre_choices, label="Filter by Genre", interactive=True)
+                    update_genre_btn = gr.Button("Apply Genre Filter", elem_classes="small-btn")
+                
+                with gr.Row():
+                    pick_songs_btn = gr.Button("Pick songs", elem_classes="small-btn")
+
+                # Set initial song count if scan data is restored
+                _song_count_value = f"Total songs found: {len(player.audio_files)}" if getattr(player, 'audio_files', None) else ""
+                song_count_text = gr.Textbox(label="Song Count", interactive=False, value=_song_count_value)
+                playlist_table = gr.Dataframe(headers=["#", "Title", "Artist", "Album", "Genres"], interactive=False, label="Playlist")
+
+                scan_btn.click(
+                    fn=start_background_scan,
+                    inputs=[folder_input],
+                    outputs=[song_count_text, genre_dropdown, status_text]
+                )
+                refresh_btn.click(
+                    fn=refresh_playlist_and_genres,
+                    outputs=[song_count_text, genre_dropdown, status_text]
+                )
+                update_genre_btn.click(
+                    fn=lambda genres: f"Total songs found: {len(player.filter_by_genre(genres))}",
+                    inputs=[genre_dropdown],
+                    outputs=[song_count_text]
+                )
+                # Connect the Pick songs button
+                def pick_and_inject_script_web(n, genres):
+                    # Call pick_songs with autoplay flag set to True
+                    result = pick_songs(n, genres, should_autoplay=True)
+                    # Include a script that will run when this function completes
+                    js_code = '''
+                    <script>
+                    // Directly execute the refresh and play
+                    (function() {
+                        console.log("Triggering player refresh with autoplay");
+                        setTimeout(function() {
+                            const iframe = document.getElementById('wavesurfer-iframe');
+                            if (iframe && iframe.contentWindow) {
+                                console.log("Sending message to iframe");
+                                iframe.contentWindow.postMessage({type: 'refresh-and-play'}, '*');
+                            } else {
+                                console.log("Iframe not found or contentWindow not available");
+                            }
+                        }, 1500);
+                    })();
+                    </script>
+                    '''
+                    return gr.update(value=result), gr.update(value=js_code)
+                
+                autoplay_script_web = gr.HTML(visible=True)
+                
+                pick_songs_btn.click(
+                    fn=pick_and_inject_script_web,
+                    inputs=[pick_count_web, genre_dropdown],
+                    outputs=[playlist_table, autoplay_script_web]
+                )
+
+            # Simplified Settings tab with just the pick count parameter
+            with gr.Tab("Settings"):
+                gr.Markdown("### General Settings")
+                with gr.Row():
+                    pick_count_web = gr.Number(value=load_pick_count(), label="Number of Songs to Pick", precision=0)
+                pick_count_web.change(fn=save_pick_count, inputs=[pick_count_web], outputs=[pick_count_web])
+                gr.Markdown("Set how many random songs to pick when you use the 'Pick songs' button in the Player tab.")
+
+    return web_interface
+
+# Create and mount the web interface at /web path
+web_interface = create_web_interface()
+app = gr.mount_gradio_app(app, web_interface, path="/web")
 
 # --- End Hybrid API endpoints ---
 
