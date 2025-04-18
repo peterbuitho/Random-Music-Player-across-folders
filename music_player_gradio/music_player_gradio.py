@@ -121,12 +121,9 @@ class MusicPlayerGradio:
             self.genres = genre_set
             self.genre_filter = set()
             self.playlist = self.audio_files.copy()
-            random.shuffle(self.playlist)
-            self.current = 0
-            # Always return the genre list, even if empty
-            return self.get_playlist_table(), sorted(list(self.genres))
         random.shuffle(self.playlist)
         self.current = 0
+        print(f"[DEBUG] scan_files: Playlist populated with {len(self.playlist)} songs.")
         # Always return the genre list, even if empty
         return self.get_playlist_table(), sorted(list(self.genres))
 
@@ -166,15 +163,22 @@ class MusicPlayerGradio:
 
     def play(self):
         audio_url, title, artist = self.get_current_audio()
+        if audio_url is None:
+            # Playlist is empty or invalid
+            return None, "No song loaded", "", "No songs found in playlist. Please scan folders or check your music directory."
         lyrics = fetch_lyrics(artist, title) if artist and title else ""
         return audio_url, title, artist, lyrics
 
     def next(self):
+        if not self.playlist:
+            return None, "No song loaded", "", "No songs found in playlist. Please scan folders or check your music directory."
         if self.current < len(self.playlist) - 1:
             self.current += 1
         return self.play()
 
     def prev(self):
+        if not self.playlist:
+            return None, "No song loaded", "", "No songs found in playlist. Please scan folders or check your music directory."
         if self.current > 0:
             self.current -= 1
         return self.play()
@@ -456,7 +460,7 @@ D:/Music1, D:/Music2; \\BuiDS\musik
             _song_count_value = f"Total songs found: {len(player.audio_files)}" if getattr(player, 'audio_files', None) else ""
             song_count_text = gr.Textbox(label="Song Count", interactive=False, value=_song_count_value)
             playlist_table = gr.Dataframe(headers=["#", "Title", "Artist", "Album", "Genres"], interactive=False, label="Playlist")
-            song_number_input = gr.Number(value=1, label="Song Number to Play (1-based)", precision=0)
+            song_number_input = gr.Number(value=1, label="Song Number to Play (1-based)", precision=0, interactive=True)
 
             with gr.Row():
                 prev_btn = gr.Button("Previous")
@@ -467,6 +471,21 @@ D:/Music1, D:/Music2; \\BuiDS\musik
             song_title = gr.Textbox(label="Title", interactive=False)
             song_artist = gr.Textbox(label="Artist", interactive=False)
             lyrics_box = gr.Textbox(label="Lyrics", lines=8, interactive=False)
+
+            # --- Wire up transport buttons ---
+            play_btn.click(
+                fn=play,
+                inputs=[song_number_input],
+                outputs=[audio, song_title, song_artist, lyrics_box]
+            )
+            prev_btn.click(
+                fn=prev_song,
+                outputs=[audio, song_title, song_artist, lyrics_box]
+            )
+            next_btn.click(
+                fn=next_song,
+                outputs=[audio, song_title, song_artist, lyrics_box]
+            )
 
             # Update song selector choices after scanning or picking songs
             def update_song_selector_table():
@@ -515,20 +534,25 @@ D:/Music1, D:/Music2; \\BuiDS\musik
                 # Show message before restarting
                 time.sleep(0.5)
                 os.execl(sys.executable, sys.executable, *sys.argv)
-            restart_btn = gr.Button("Restart Server", elem_classes="small-btn")
+            with gr.Row():
+                restart_btn = gr.Button("Restart Server", elem_classes="small-btn")
+                stop_btn = gr.Button("Stop Server", elem_classes="small-btn")
             restart_status = gr.Markdown(visible=False)
             def show_restarting():
                 return gr.update(visible=True), "Restarting server... Please reload your browser in a few seconds."
             restart_btn.click(fn=restart_server, outputs=[])
             restart_btn.click(fn=show_restarting, outputs=[restart_status])
-            # --- End restart button ---
+            def stop_server():
+                import os
+                os._exit(0)
+            stop_btn.click(fn=stop_server, outputs=[])
+
 
 allowed_paths = get_allowed_paths()
-demo.launch(allowed_paths=allowed_paths, inbrowser=True, share=True)
-folder_input = gr.Textbox(
-    label="Music Folder Paths",
-    placeholder=r"e.g. D:/Music1, D:/Music2; \\BuiDS\musik",
-    value=_folder_input_value or ""
-)
-allowed_paths = get_allowed_paths()
-demo.launch(allowed_paths=allowed_paths, inbrowser=True, share=True)
+
+# Inject favicon using custom HTML
+favicon_html = """
+<link rel=\"icon\" type=\"image/x-icon\" href=\"favicon.ico\">\n"""
+gr.HTML(favicon_html)
+
+demo.launch(allowed_paths=allowed_paths, inbrowser=True)

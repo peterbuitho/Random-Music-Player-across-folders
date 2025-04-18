@@ -1,0 +1,13 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="256" height="256" rx="48" fill="#7C3AED"/>
+  <g filter="url(#shadow)">
+    <path d="M64 160v-24a64 64 0 01128 0v24" stroke="#FFD600" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <rect x="40" y="144" width="40" height="56" rx="16" fill="#FFD600"/>
+    <rect x="176" y="144" width="40" height="56" rx="16" fill="#FFD600"/>
+  </g>
+  <defs>
+    <filter id="shadow" x="0" y="0" width="256" height="256" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#000" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+</svg>
