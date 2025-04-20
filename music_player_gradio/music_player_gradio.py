@@ -555,7 +555,7 @@ audio:-webkit-media-controls-play-button {
 **Tip:** You can enter multiple music folder paths, separated by commas or semicolons.<br>
 **Example:**
 ```
-\\BuiDS\musik\24bit_flac; \\BuiDS\musik\16bit
+\\<server>\music; /<volume>/music
 ```
 (You can use either forward or backslashes for paths.)
 """)
