@@ -1,4 +1,4 @@
-# Random Music Player
+# Random Music Player (Gradio Web Edition)
 
 A modern web-based music player application with a beautiful UI, built with Python, FastAPI, and Gradio. It provides a responsive interface for browsing, filtering, and playing your music library across multiple folders.
 
