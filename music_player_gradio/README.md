@@ -40,6 +40,8 @@ pip install -r requirements.txt
 
 ## Running the Application
 
+### Standard Method
+
 Start the server with:
 
 ```bash
@@ -47,6 +49,47 @@ uvicorn music_player_gradio:app --host 0.0.0.0 --port 7860
 ```
 
 Then open your browser to `http://localhost:7860/web` to access the web interface.
+
+### Docker Deployment
+
+The application includes Docker support for easy containerization and deployment.
+
+#### Using docker-compose (Recommended)
+
+1. Configure your music folder path in `docker-compose.yml`:
+   ```yaml
+   volumes:
+     - "/path/to/your/music:/app/music:ro"  # Replace with your music folder path
+     - "./cache:/app/cache"
+   ```
+
+2. Set your OpenRouter API key (for AI features) as an environment variable:
+   ```bash
+   export OPENROUTER_API_KEY=your_api_key_here
+   ```
+
+3. Build and start the container:
+   ```bash
+   docker-compose up -d
+   ```
+
+4. Access the web interface at `http://localhost:7860/web`
+
+#### Manual Docker Build
+
+Alternatively, you can build and run the Docker container manually:
+
+```bash
+# Build the image
+docker build -t music-player-gradio .
+
+# Run the container
+docker run -p 7860:7860 \
+  -v "/path/to/your/music:/app/music:ro" \
+  -v "./cache:/app/cache" \
+  -e OPENROUTER_API_KEY=your_api_key_here \
+  music-player-gradio
+```
 
 ## API Documentation
 
