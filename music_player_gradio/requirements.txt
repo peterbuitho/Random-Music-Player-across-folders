@@ -1,3 +1,5 @@
 gradio
 mutagen
 requests
+fastapi
+uvicorn[standard]

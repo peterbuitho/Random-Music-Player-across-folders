@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  music-app:
+    build: .
+    image: music-player-gradio:latest
+    ports:
+      - "7860:7860"
+    volumes:
+      - "/volume1/musik:/app/music:ro"
+      - "./cache:/app/cache"
+    environment:
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
+      # Add any other env vars you need
