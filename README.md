@@ -1,6 +1,7 @@
 # Random Music Player (Desktop Edition)
 
 A modern desktop application with a beautiful UI for browsing, filtering, and playing your music library across multiple folders, built with Python and Tkinter.
+Check out the [Gradio version](music_player_gradio/README.md) for a web-based experience.
 
 ## Features
 
@@ -26,7 +27,7 @@ python-vlc
 mutagen
 Pillow
 requests
-rapidfuzz
+rapidfuzz (only for Gradio version)
 ```
 
 Install dependencies using pip:
