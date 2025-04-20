@@ -92,8 +92,8 @@ def get_tags(filepath):
                     # If we can't parse the year, don't set it
                     pass
                 break
+                
     except Exception:
-        # Don't add year if there was an error
         pass
 
     return tags
@@ -375,25 +375,21 @@ class MusicPlayerGradio:
 
     def get_playlist_table(self):
         rows = []
-        for idx, f in enumerate(self.playlist):
-            try:
-                tags = self.tags_cache.get(f) or get_tags(f)
-                # Make sure we have at least a title
-                title = tags.get('title')
-                if not title or title.strip() == '':
-                    title = os.path.basename(f)
-                artist = tags.get('artist', '')
-                album = tags.get('album', '')
-                # Fix empty or zero years
-                year = tags.get('year', '')
-                if year == 0 or not str(year).strip():
-                    year = ''
-                genres = ', '.join(tags.get('genres', []))
-                # Only add rows with valid titles
-                if title and title.strip() != '':
-                    rows.append([idx+1, title, artist, album, year, genres])
-            except Exception as e:
-                print(f"Error processing playlist item {idx}: {e}")
+        for idx, f in enumerate(self.playlist): tags = self.tags_cache.get(f) or get_tags(f)
+        # Make sure we have at least a title
+        title = tags.get('title')
+        if not title or title.strip() == '':
+            title = os.path.basename(f)
+        artist = tags.get('artist', '')
+        album = tags.get('album', '')
+        # Fix empty or zero years
+        year = tags.get('year', '')
+        if year == 0 or not str(year).strip():
+            year = ''
+        genres = ', '.join(tags.get('genres', []))
+        # Only add rows with valid titles
+        if title and title.strip() != '':
+            rows.append([idx+1, title, artist, album, year, genres])
         return rows
 
     def get_current_audio(self):
@@ -1577,7 +1573,7 @@ def create_web_interface():
                 # Set initial song count if scan data is restored
                 _song_count_value = f"Total songs found: {len(player.audio_files)}" if getattr(player, 'audio_files', None) else ""
                 song_count_text = gr.Textbox(label="Song Count", interactive=False, value=_song_count_value)
-                playlist_table = gr.Dataframe(headers=["#", "Title", "Artist", "Album", "Year", "Genres"], interactive=False, label="Playlist")
+                playlist_table = gr.Dataframe(headers=["#", "Title", "Artist", "Album", "Genres"], interactive=False, label="Playlist")
 
                 scan_btn.click(
                     fn=start_background_scan,
