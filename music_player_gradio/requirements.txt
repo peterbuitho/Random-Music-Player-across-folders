@@ -3,3 +3,5 @@ mutagen
 requests
 fastapi
 uvicorn[standard]
+rapidfuzz
+musicbrainzngs

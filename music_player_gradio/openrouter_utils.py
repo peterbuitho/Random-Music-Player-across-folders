@@ -281,36 +281,41 @@ def chat_completion(messages, model=None):
 
 def parse_genre_request(query, available_genres):
     """
-    Parse a user request to filter by genres and pick songs
+    Parse a user request to filter by genres, duration, and year range, and pick songs
     
     Returns:
     - selected_genres: list of selected genres
-    - num_songs: number of songs to pick
+    - num_songs: number of songs to pick (or None if not specified)
+    - duration: target duration in minutes (or None if not specified)
+    - year_start: start year (or None if not specified)
+    - year_end: end year (or None if not specified)
+    - title_keywords: list of keywords to match in song titles (or None if not specified)
+    - album_filters: list of album names to filter by (or None if not specified)
     - error: error message if any
     """
     messages = [
-        {"role": "system", "content": f"You are a helpful assistant that helps users filter music by genre and pick songs. Available genres are: {', '.join(available_genres)}. Your task is to identify which genres the user wants and how many songs they want to pick."},
+        {"role": "system", "content": f"You are a helpful assistant that helps users filter music by genre, duration, year range, track title keywords, album names, and artist names. Available genres are: {', '.join(available_genres)}. Identify which genres the user wants, the number of songs or target duration, optional start/end years, keywords to match in song titles, album filters, and artist filters (artist names)."},
         {"role": "user", "content": query}
     ]
     
     response = chat_completion(messages)
     
     if "error" in response:
-        return [], 10, response["error"]
+        return [], None, None, None, None, None, None, response["error"]
     
     try:
         assistant_message = response["choices"][0]["message"]["content"]
         
         # Now ask the model to parse its own response into a structured format
         parsing_messages = [
-            {"role": "system", "content": "Extract the genres and song count from your previous response. Return JSON in the format: {\"genres\": [\"genre1\", \"genre2\"], \"count\": 10}. Only include genres from the available list."},
-            {"role": "user", "content": f"Available genres: {', '.join(available_genres)}\nYour response: {assistant_message}\n\nExtract genres and song count as JSON:"}
+            {"role": "system", "content": "Extract genres, song count (if specified), target duration (minutes), optional year_start, year_end, list of title keywords (title_keywords), list of album names (album_filters), and list of artist names (artist_filters) from your previous response. Return JSON in this format: {\"genres\": [\"pop\"], \"count\": 5, \"duration\": 20, \"year_start\": 1980, \"year_end\": 1990, \"title_keywords\": [\"summer\"], \"album_filters\": [\"Summer Hits\"], \"artist_filters\": [\"ABBA\"]}. Omit any fields not specified by the user."},
+            {"role": "user", "content": f"Available genres: {', '.join(available_genres)}\nYour response: {assistant_message}\n\nExtract as JSON:"}
         ]
         
         parsing_response = chat_completion(parsing_messages)
         
         if "error" in parsing_response:
-            return [], 10, parsing_response["error"]
+            return [], None, None, None, None, None, None, parsing_response["error"]
         
         parsed_content = parsing_response["choices"][0]["message"]["content"]
         
@@ -321,21 +326,58 @@ def parse_genre_request(query, available_genres):
             try:
                 parsed_json = json.loads(json_match.group(1))
                 
-                # Validate and filter genres
                 selected_genres = [g for g in parsed_json.get("genres", []) if g in available_genres]
-                num_songs = int(parsed_json.get("count", 10))
                 
-                # Ensure reasonable number of songs
-                if num_songs <= 0:
-                    num_songs = 10
-                elif num_songs > 100:
-                    num_songs = 100
-                    
-                return selected_genres, num_songs, None
+                # Safely parse count, avoid int(None)
+                raw_count = parsed_json.get("count", None)
+                try:
+                    if raw_count is not None:
+                        num_songs = int(raw_count)
+                        if num_songs <= 0:
+                            num_songs = None
+                        elif num_songs > 100:
+                            num_songs = 100
+                    else:
+                        num_songs = None
+                except Exception:
+                    num_songs = None
+                
+                duration = parsed_json.get("duration", None)
+                year_start = parsed_json.get("year_start", None)
+                year_end = parsed_json.get("year_end", None)
+                title_keywords = parsed_json.get("title_keywords", None)
+                album_filters = parsed_json.get("album_filters", None)
+                artist_filters = parsed_json.get("artist_filters", None)
+                
+                # Normalize year values
+                try:
+                    year_start = int(year_start) if year_start else None
+                    year_end = int(year_end) if year_end else None
+                except:
+                    year_start = year_end = None
+
+                # --- Fallback: parse decade expressions from user query if LLM failed ---
+                if (year_start is None and year_end is None):
+                    import re
+                    # Look for decade pattern: e.g. 2020s, 2020's, the 1980s, etc.
+                    decade_match = re.search(r"(\d{4})['’]?s", query)
+                    if decade_match:
+                        decade = int(decade_match.group(1))
+                        year_start = decade
+                        year_end = decade + 9
+                    else:
+                        # If a precise year is mentioned (not followed by 's'), do not interpret as decade
+                        year_match = re.search(r"\b(\d{4})\b", query)
+                        if year_match:
+                            year = int(year_match.group(1))
+                            year_start = year
+                            year_end = year
+                
+                return selected_genres, num_songs, duration, year_start, year_end, title_keywords, album_filters, artist_filters, None
             except Exception as e:
-                return [], 10, f"Failed to parse response: {str(e)}"
+                return [], None, None, None, None, None, None, None, f"Failed to parse response: {str(e)}"
         
-        return [], 10, "Could not extract valid genres and song count"
+        return [], None, None, None, None, None, None, None, "Could not extract valid genres and filters"
         
     except Exception as e:
-        return [], 10, f"Failed to process response: {str(e)}"
+        return [], None, None, None, None, None, None, None, f"Failed to process response: {str(e)}"

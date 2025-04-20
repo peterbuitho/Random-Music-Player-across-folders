@@ -398,13 +398,13 @@ function updateLyrics(idx) {
 
 function updatePlaylistUI() {
     const plDiv = document.getElementById('playlist');
-    let html = '<table><thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th></tr></thead><tbody>';
+    let html = '<table><thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Album</th><th>Year</th></tr></thead><tbody>';
     
     if (playlist.length === 0) {
-        html += '<tr><td colspan="4">No songs in playlist</td></tr>';
+        html += '<tr><td colspan="5">No songs in playlist</td></tr>';
     } else {
         playlist.forEach((song, idx) => {
-            html += `<tr data-idx="${idx}"${idx===currentIdx?' class="selected"':''}><td>${idx+1}</td><td>${song.title||''}</td><td>${song.artist||''}</td><td>${song.album||''}</td></tr>`;
+            html += `<tr data-idx="${idx}"${idx===currentIdx?' class="selected"':''}><td>${idx+1}</td><td>${song.title||''}</td><td>${song.artist||''}</td><td>${song.album||''}</td><td>${song.year||''}</td></tr>`;
         });
     }
     

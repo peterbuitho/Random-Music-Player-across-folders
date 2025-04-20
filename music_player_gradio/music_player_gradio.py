@@ -45,7 +45,7 @@ def get_tags(filepath):
     try:
         audio = File(filepath)
     except Exception as e:
-        
+        # print(f"Error reading file: {e}")
         return {'genres': []}
     tags = {}
     if audio is None or not hasattr(audio, 'tags') or audio.tags is None:
@@ -73,7 +73,20 @@ def get_tags(filepath):
                 v = audio.tags[key]
                 tags[tag] = str(v[0]) if isinstance(v, list) else str(v)
     tags['cover'] = None  # Skipping cover art for now
-    
+
+    # Add duration and year metadata
+    try:
+        if hasattr(audio, 'info') and hasattr(audio.info, 'length'):
+            tags['duration'] = int(audio.info.length)
+        for key in all_keys:
+            if key.lower() in ('date', 'year'):
+                val = audio.tags[key]
+                year_str = val[0] if isinstance(val, list) else val
+                tags['year'] = int(str(year_str)[:4])
+                break
+    except Exception:
+        pass
+
     return tags
 
 LYRICS_API = "https://api.lyrics.ovh/v1/{artist}/{title}"
@@ -205,6 +218,97 @@ def pick_songs(n, genres=None, should_autoplay=False):
         "current": player.current
     }
 
+# Helper: pick songs to match target duration (minutes) with optional genre and year filters
+def pick_songs_by_duration(target_minutes, genres=None, year_start=None, year_end=None, title_keywords=None, album_filters=None):
+    import random
+    player.autoplay_next = True
+    pool = []
+    for f in player.audio_files:
+        tags = player.tags_cache.get(f, {})
+        # Genre filter
+        if genres and not any(g in tags.get('genres', []) for g in genres):
+            continue
+        # Title keywords
+        if title_keywords:
+            title = tags.get('title','').lower()
+            if not any(kw.lower() in title for kw in title_keywords):
+                continue
+        # Album filters
+        if album_filters:
+            album = tags.get('album','').lower()
+            if not any(af.lower() in album for af in album_filters):
+                continue
+        if year_start and tags.get('year') and tags['year'] < year_start:
+            continue
+        if year_end and tags.get('year') and tags['year'] > year_end:
+            continue
+        pool.append(f)
+    random.shuffle(pool)
+    target_sec = target_minutes * 60
+    total = 0
+    playlist = []
+    for f in pool:
+        dur = player.tags_cache.get(f, {}).get('duration', 0)
+        if playlist and total + dur > target_sec:
+            break
+        playlist.append(f)
+        total += dur
+    player.playlist = playlist
+    player.current = 0
+
+# New helper: pick N songs using advanced filters
+def pick_songs_by_filters(n, genres=None, title_keywords=None, album_filters=None, year_start=None, year_end=None, artist_filters=None):
+    import random
+    from rapidfuzz.fuzz import ratio
+    FUZZY_THRESHOLD = 80
+    # Validate and cap song count
+    try:
+        n = max(1, min(int(n), 100))
+    except (ValueError, TypeError):
+        n = load_pick_count()
+    player.autoplay_next = True
+    pool = []
+
+    
+    pool = []
+    for f in player.audio_files:
+        tags = player.tags_cache.get(f, {})
+
+        # Genre
+        if genres and not any(g in tags.get('genres', []) for g in genres):
+            continue
+        # Title keywords
+        if title_keywords:
+            title = tags.get('title', '').lower()
+            if not any(ratio(kw.lower(), title) >= FUZZY_THRESHOLD for kw in title_keywords):
+                continue
+        # Album filters
+        if album_filters:
+            album = tags.get('album', '').lower()
+            if not any(ratio(a.lower(), album) >= FUZZY_THRESHOLD for a in album_filters):
+                continue
+        # Artist filters
+        if artist_filters:
+            artist = tags.get('artist', '').lower()
+            if not any(ratio(a.lower(), artist) >= FUZZY_THRESHOLD for a in artist_filters):
+                continue
+        # Year range
+        if year_start and tags.get('year') and tags['year'] < year_start:
+            continue
+        if year_end and tags.get('year') and tags['year'] > year_end:
+            continue
+        pool.append(f)
+    
+    if not pool:
+        player.playlist = []
+        player.current = 0
+        return
+    if len(pool) <= n:
+        playlist = pool.copy()
+    else:
+        playlist = random.sample(pool, n)
+    player.playlist = playlist
+    player.current = 0
 
 class MusicPlayerGradio:
     def __init__(self):
@@ -223,8 +327,13 @@ class MusicPlayerGradio:
         self.audio_files = get_audio_files(folders, AUDIO_EXTS)
         self.tags_cache = {}
         genre_set = set()
+
         for i, f in enumerate(self.audio_files):
             tags = get_tags(f)
+            # Fetch missing metadata if needed
+            if not tags.get('year') or not tags.get('artist') or not tags.get('album') or not tags.get('title'):
+
+                tags = get_tags(f)  # Re-read after update
             self.tags_cache[f] = tags
             genre_set.update(tags.get('genres', []))
             if i < 3:
@@ -262,8 +371,9 @@ class MusicPlayerGradio:
             title = tags.get('title', os.path.basename(f))
             artist = tags.get('artist', '')
             album = tags.get('album', '')
+            year = tags.get('year', '')
             genres = ', '.join(tags.get('genres', []))
-            rows.append([idx+1, title, artist, album, genres])
+            rows.append([idx+1, title, artist, album, year, genres])
         return rows
 
     def get_current_audio(self):
@@ -414,7 +524,6 @@ def clear_cache():
             return "No cache to clear.", gr.update(choices=[]), "No cache to clear."
     except Exception as e:
         return f"Error clearing cache: {e}", gr.update(choices=[]), f"Error clearing cache: {e}"
-
 
 def update_genre_filter(selected_genres):
     # Only update the song count, not the playlist table, after filtering by genre
@@ -634,12 +743,10 @@ audio:-webkit-media-controls-play-button {
             # Connect the Pick songs button - simple pre-LLM style
             def pick_and_update_table(n, genres):
                 # Simple function like before LLM integration
-                if not n:
-                    n = 10
                 try:
-                    n = int(n)
+                    n = max(1, min(int(n), 100))
                 except (ValueError, TypeError):
-                    n = 10
+                    n = load_pick_count()
                 
                 # Set autoplay flag
                 player.autoplay_next = True
@@ -699,7 +806,26 @@ audio:-webkit-media-controls-play-button {
             
             with gr.Row():
                 chat_input = gr.Textbox(label="Ask the AI to pick songs or filter by genre", placeholder="Example: Play 5 random rock songs", lines=2)
-                chat_submit = gr.Button("Send", variant="primary")
+            chat_submit = gr.Button("Send", variant="primary")
+            # Custom JS: Ctrl+Enter submits, Enter inserts newline
+            gr.HTML("""
+            <script>
+            (function() {
+                let chatBox = document.querySelector('textarea[placeholder*="pick songs"], textarea[placeholder*="LLM"]');
+                if (chatBox) {
+                    chatBox.addEventListener('keydown', function(e) {
+                        if (e.key === 'Enter' && e.ctrlKey) {
+                            e.preventDefault();
+                            // Find the Send button and click it
+                            let sendBtn = chatBox.parentElement.parentElement.querySelector('button');
+                            if (sendBtn) sendBtn.click();
+                        }
+                        // Enter alone inserts newline (default behavior)
+                    });
+                }
+            })();
+            </script>
+            """)
             
             with gr.Row():
                 chat_status = gr.Markdown("")
@@ -719,32 +845,69 @@ audio:-webkit-media-controls-play-button {
                 if not available_genres:
                     return history + [{"role": "assistant", "content": "No genres found. Please scan your music folders first."}], "", None
                 
-                # Add request to history
-                new_history = history + [{"role": "assistant", "content": "Thinking..."}]
+                # Add user prompt to history
+                new_history = history + [{"role": "user", "content": message}]
                 
                 try:
-                    # Parse the request
-                    selected_genres, num_songs, error = parse_genre_request(message, available_genres)
+                    # Parse the request for genres, count or duration, and year range
+                    selected_genres, num_songs, duration, year_start, year_end, title_keywords, album_filters, artist_filters, error = parse_genre_request(message, available_genres)
                     
                     if error:
-                        new_history[-1]["content"] = f"Error: {error}"
+                        # Add assistant error response to history
+                        new_history.append({"role": "assistant", "content": f"Error: {error}"})
                         return new_history, "", None
                     
-                    # Filter by selected genres and pick songs
-                    if selected_genres:
-                        player.filter_by_genre(selected_genres)
-                        genre_text = ", ".join(selected_genres)
+                    # Ensure at least a count or duration
+                    if duration is None and num_songs is None:
+                        num_songs = load_pick_count()
+                    
+                    # Pick by duration if specified, otherwise by count
+                    if duration:
+                        pick_songs_by_duration(duration, selected_genres, year_start, year_end, title_keywords, album_filters)
+                        # Build optional year text
+                        yr_text = ""
+                        if year_start and year_end:
+                            yr_text = f" between {year_start} and {year_end}"
+                        elif year_start:
+                            yr_text = f" from {year_start} onward"
+                        elif year_end:
+                            yr_text = f" up to {year_end}"
+                        response = f"Playing ~{duration} minutes of {', '.join(selected_genres)} songs{yr_text}. The music will start momentarily."
+                        # Check if any songs were picked
+                        if not player.playlist:
+                            response = "No songs matched your filters. Please try different criteria."
                     else:
-                        player.filter_by_genre([])
-                        genre_text = "all"
-                    
-                    # Pick songs and set autoplay
-                    pick_songs(num_songs, selected_genres, should_autoplay=True)
-                    
-                    # Generate response
-                    response = f"Playing {num_songs} songs from genres: {genre_text}. The music will start momentarily."
-                    new_history[-1]["content"] = response
-                    
+                        pick_songs_by_filters(num_songs, selected_genres, title_keywords, album_filters, year_start, year_end, artist_filters)
+                        
+                        # Set autoplay only if songs were picked
+                        if player.playlist:
+                            player.autoplay_next = True
+                        # Add year/decade info to response if present
+                        yr_text = ""
+                        if year_start and year_end:
+                            yr_text = f" between {year_start} and {year_end}"
+                        elif year_start:
+                            yr_text = f" from {year_start} onward"
+                        elif year_end:
+                            yr_text = f" up to {year_end}"
+                        filter_parts = []
+                        if selected_genres:
+                            filter_parts.append(f"genres: {', '.join(selected_genres)}")
+                        if title_keywords:
+                            filter_parts.append(f"titles: {', '.join(title_keywords)}")
+                        if album_filters:
+                            filter_parts.append(f"albums: {', '.join(album_filters)}")
+                        if artist_filters:
+                            filter_parts.append(f"artists: {', '.join(artist_filters)}")
+                        if yr_text:
+                            filter_parts.append(yr_text.strip())
+                        filter_summary = "; ".join(filter_parts)
+                        response = f"Playing {num_songs} songs from filters: {filter_summary}. The music will start momentarily."
+                        # Check if any songs were picked
+                        if not player.playlist:
+                            response = "No songs matched your filters. Please try different criteria."
+                    # Add assistant answer to chat history
+                    new_history.append({"role": "assistant", "content": response})
                     # Use enhanced direct approach to refresh the player with better parameters
                     js_code = '''
                     <script>
@@ -770,7 +933,7 @@ audio:-webkit-media-controls-play-button {
                     return new_history, "", gr.update(value=js_code)
                     
                 except Exception as e:
-                    new_history[-1]["content"] = f"An error occurred: {str(e)}"
+                    new_history.append({"role": "assistant", "content": f"An error occurred: {str(e)}"})
                     return new_history, "", None
             
             chat_submit.click(
@@ -1145,6 +1308,7 @@ async def playlist_api(request: Request):
         title = tags.get('title', os.path.basename(f))
         artist = tags.get('artist', '')
         album = tags.get('album', '')
+        year = tags.get('year', '')
         genres = tags.get('genres', [])
         lyrics = tags.get('lyrics', '') or tags.get('lyric', '')
         cover_url = None
@@ -1156,6 +1320,7 @@ async def playlist_api(request: Request):
             "title": title,
             "artist": artist,
             "album": album,
+            "year": year,
             "genres": genres,
             "audio_url": f"/audio/{idx}?cache={int(time.time() * 1000 + random.randint(1, 10000))}",
             "lyrics_url": f"/lyrics/{idx}",
@@ -1274,6 +1439,7 @@ async def pick_songs_api(request: Request):
         title = tags.get('title', os.path.basename(f))
         artist = tags.get('artist', '')
         album = tags.get('album', '')
+        year = tags.get('year', '')
         genres = tags.get('genres', [])
         cover_url = None
         cover_path = get_cover_path(f)
@@ -1284,6 +1450,7 @@ async def pick_songs_api(request: Request):
             "title": title,
             "artist": artist,
             "album": album,
+            "year": year,
             "genres": genres,
             "audio_url": f"/audio/{idx}?cache={int(time.time() * 1000 + random.randint(1, 10000))}",
             "lyrics_url": f"/lyrics/{idx}",
@@ -1541,29 +1708,34 @@ def create_web_interface():
                     new_history = history + [{"role": "assistant", "content": "Thinking..."}]
                     
                     try:
-                        # Parse the request
-                        selected_genres, num_songs, error = parse_genre_request(message, available_genres)
+                        # Parse the request for genres, count or duration, and year range
+                        selected_genres, num_songs, duration, year_start, year_end, title_keywords, album_filters, error = parse_genre_request(message, available_genres)
                         
                         if error:
                             new_history[-1]["content"] = f"Error: {error}"
                             return new_history, ""
                         
-                        # Filter by selected genres and pick songs
-                        if selected_genres:
-                            player.filter_by_genre(selected_genres)
-                            genre_text = ", ".join(selected_genres)
+                        # Ensure at least a count or duration
+                        if duration is None and num_songs is None:
+                            new_history[-1]["content"] = "Error: could not determine song count or duration. Please specify one."
+                            return new_history, ""
+                        
+                        # Pick by duration if specified, otherwise by count
+                        if duration:
+                            pick_songs_by_duration(duration, selected_genres, year_start, year_end, title_keywords, album_filters)
+                            yr_text = ""
+                            if year_start and year_end:
+                                yr_text = f" between {year_start} and {year_end}"
+                            elif year_start:
+                                yr_text = f" from {year_start} onward"
+                            elif year_end:
+                                yr_text = f" up to {year_end}"
+                            response = f"Playing ~{duration} minutes of {', '.join(selected_genres)} songs{yr_text}. The music will start momentarily."
                         else:
-                            player.filter_by_genre([])
-                            genre_text = "all"
+                            pick_songs_by_filters(num_songs, selected_genres, title_keywords, album_filters, year_start, year_end)
+                            response = f"Playing {num_songs} songs from filters: {', '.join(selected_genres)}{(' with titles '+', '.join(title_keywords)) if title_keywords else ''}{(' from albums '+', '.join(album_filters)) if album_filters else ''}. The music will start momentarily."
                         
-                        # Pick songs and set autoplay
-                        pick_songs(num_songs, selected_genres, should_autoplay=True)
-                        
-                        # Generate response
-                        response = f"Playing {num_songs} songs from genres: {genre_text}. The music will start momentarily."
-                        new_history[-1]["content"] = response
-                        
-                        return new_history, ""
+                        return new_history, "", gr.update(value=f"<script>setTimeout(function() {{ console.log('Refreshing player...'); window.location.reload(); }}, 1000);</script>")
                         
                     except Exception as e:
                         new_history[-1]["content"] = f"An error occurred: {str(e)}"
